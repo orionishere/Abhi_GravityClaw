@@ -1,0 +1,32 @@
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Build output (if any TS compilation happens)
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Databases & local memory
+data/
+*.db
+*.sqlite
+*.sqlite3
+*-shm
+*-wal
+
+# Temp scratch files
+temp/
+tmp/
+*.ogg
+*.mp3

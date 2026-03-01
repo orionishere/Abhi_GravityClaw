@@ -1,22 +1,32 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import OpenAI from "openai";
+import fs from "fs";
+import path from "path";
+
+// Docker execution command wrapper
+function createDockerCommand(command: string, args: string[]): { command: string, args: string[] } {
+    return {
+        command: "docker",
+        args: [
+            "run",
+            "--rm",
+            "-v", "/Users/abhismac/Desktop/GravityClaw/data/sandbox:/sandbox",
+            "node:18-alpine", // Using Node.js alpine image for npx
+            "/bin/sh", "-c",
+            `${[command, ...args.map(arg => arg.replace("/Users/abhismac/Desktop/GravityClaw/data/sandbox", "/sandbox"))].join(' ')}`
+        ]
+    };
+}
 
 // Hardcoded explicit list of MCP servers we trust and want to run
-// For Level 4, we will configure a basic filesystem/shell MCP as requested
 export const mcpConfig = {
     servers: {
-        // We will install an executable sqlite/filesystem/shell provider later if requested,
-        // For now, this is the architecture to mount a local shell MCP safely
-        "filesystem-mcp": {
-            command: "npx",
-            args: [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "/Users/abhismac/Desktop/GravityClaw"
-            ],
-            // Note: Securely restricts access to the bot's own root directory
-        }
+        "filesystem-mcp": createDockerCommand("npx", [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/sandbox"
+        ]),
     }
 };
 
@@ -28,6 +38,13 @@ interface MCPServerInstance {
 export const mcpServers: Record<string, MCPServerInstance> = {};
 
 export async function initMCPs() {
+    // Ensure the sandbox directory exists
+    const sandboxDir = "/Users/abhismac/Desktop/GravityClaw/data/sandbox";
+    if (!fs.existsSync(sandboxDir)) {
+        fs.mkdirSync(sandboxDir, { recursive: true });
+        console.log(`[MCP] Created sandbox directory at ${sandboxDir}`);
+    }
+
     console.log(`[MCP] Initializing trusted server bridges...`);
 
     for (const [serverName, config] of Object.entries(mcpConfig.servers)) {
@@ -67,7 +84,7 @@ export function getMCPToolsSchema(): OpenAI.Chat.ChatCompletionTool[] {
             allTools.push({
                 type: 'function' as const,
                 function: {
-                    name: `mcp__${serverName}__${tool.name}`, // Namespaced to prevent collision
+                    name: `mcp__${serverName}__${tool.name}`,
                     description: tool.description || `Dynamic MCP Tool from ${serverName}`,
                     parameters: tool.inputSchema as any
                 }
@@ -99,10 +116,8 @@ export async function executeMCPTool(namespacedName: string, args: any): Promise
         arguments: args
     });
 
-    // MCP servers return standard content blocks (text/image)
     const resultContents = result.content as any[];
     if (resultContents && resultContents.length > 0) {
-        // Merge text blocks back into a string for our LLM context
         return resultContents
             .filter(c => c.type === 'text')
             .map(c => c.text)

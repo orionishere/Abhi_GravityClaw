@@ -12,7 +12,7 @@ const openai = new OpenAI({
 const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
 // Security: Max iteration limit on the agent loop
-const MAX_ITERATIONS = 5;
+const MAX_ITERATIONS = 15;
 
 // Memory storage for Level 1 (in-memory)
 const conversationHistory: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -122,6 +122,7 @@ export async function handleUserMessage(text: string): Promise<string> {
     // Agentic Loop
     while (iterations < MAX_ITERATIONS) {
         iterations++;
+        console.log(`[Agent-Loop] Iteration ${iterations}/${MAX_ITERATIONS}...`);
 
         try {
             const response = await openai.chat.completions.create({
@@ -142,7 +143,7 @@ export async function handleUserMessage(text: string): Promise<string> {
 
             // If no tools were called, the agent is done and has responded to the user
             if (toolCalls.length === 0) {
-                return message.content || 'No response generated.';
+                return message.content || 'I have completed the task, but generated no text response.';
             }
 
             // Execute all requested tools

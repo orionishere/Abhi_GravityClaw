@@ -10,6 +10,9 @@ export const config = {
     geminiApiKey: process.env.GEMINI_API_KEY || '',
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY || '',
     elevenlabsVoiceId: process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB',
+    gmailUser: process.env.GMAIL_USER || '',
+    gmailAppPassword: process.env.GMAIL_APP_PASSWORD || '',
+    twitterBearerToken: process.env.TWITTER_BEARER_TOKEN || '',
 };
 
 // Validate critical configuration
@@ -32,3 +35,5 @@ if (!config.geminiApiKey) {
 if (!config.elevenlabsApiKey) {
     throw new Error('ELEVENLABS_API_KEY is not set in environment variables.');
 }
+
+// Note: Gmail and Twitter secrets are optional unless those specific features are triggered

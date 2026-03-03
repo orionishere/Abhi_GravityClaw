@@ -3,18 +3,36 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
+import { config as appConfig } from "./config.js";
 
 // Docker execution command wrapper
-function createDockerCommand(command: string, args: string[]): { command: string, args: string[] } {
+function createDockerCommand(image: string, command: string, args: string[], env: Record<string, string> = {}, extraVolumes: string[] = []): { command: string, args: string[] } {
+    const envArgs: string[] = [];
+    for (const [key, value] of Object.entries(env)) {
+        envArgs.push("-e", `${key}=${value}`);
+    }
+
+    const volumeArgs: string[] = [];
+    for (const vol of extraVolumes) {
+        volumeArgs.push("-v", vol);
+    }
+
     return {
         command: "docker",
         args: [
             "run",
+            "-i", // Critical: Keep STDIN open for the bridging protocol
             "--rm",
             "-v", "/Users/abhismac/Desktop/GravityClaw/data/sandbox:/sandbox",
-            "node:18-alpine", // Using Node.js alpine image for npx
-            "/bin/sh", "-c",
-            `${[command, ...args.map(arg => arg.replace("/Users/abhismac/Desktop/GravityClaw/data/sandbox", "/sandbox"))].join(' ')}`
+            ...volumeArgs,
+            "-e", "npm_config_update_notifier=false", // Suppress breaking stdout notices
+            ...envArgs,
+            image,
+            command,
+            ...args.map(arg => arg
+                .replace("/Users/abhismac/Desktop/GravityClaw/data/sandbox", "/sandbox")
+                .replace("/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw", "/obsidian")
+            )
         ]
     };
 }
@@ -22,11 +40,23 @@ function createDockerCommand(command: string, args: string[]): { command: string
 // Hardcoded explicit list of MCP servers we trust and want to run
 export const mcpConfig = {
     servers: {
-        "filesystem-mcp": createDockerCommand("npx", [
+        "filesystem-mcp": createDockerCommand("node:18-alpine", "npx", [
             "-y",
             "@modelcontextprotocol/server-filesystem",
-            "/sandbox"
+            "/sandbox",
+            "/obsidian"
+        ], {}, ["/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw:/obsidian"]),
+        "puppeteer-mcp": createDockerCommand("node:18", "npx", [
+            "-y",
+            "@modelcontextprotocol/server-puppeteer"
         ]),
+        "gmail-mcp": createDockerCommand("node:18-alpine", "npx", [
+            "-y",
+            "@node2flow/gmail-mcp"
+        ], {
+            "GMAIL_USER": appConfig.gmailUser,
+            "GMAIL_APP_PASSWORD": appConfig.gmailAppPassword
+        }),
     }
 };
 

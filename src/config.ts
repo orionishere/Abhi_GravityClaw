@@ -13,6 +13,9 @@ export const config = {
     gmailUser: process.env.GMAIL_USER || '',
     gmailAppPassword: process.env.GMAIL_APP_PASSWORD || '',
     twitterBearerToken: process.env.TWITTER_BEARER_TOKEN || '',
+    sandboxPath: process.env.SANDBOX_PATH || './data/sandbox',
+    obsidianPath: process.env.OBSIDIAN_PATH || '',
+    dataPath: process.env.DATA_PATH || './data',
 };
 
 // Validate critical configuration

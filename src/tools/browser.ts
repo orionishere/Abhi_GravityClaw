@@ -1,4 +1,5 @@
 import { chromium, Browser, Page } from 'playwright';
+import { config } from '../config.js';
 
 let browser: Browser | null = null;
 let page: Page | null = null;
@@ -138,7 +139,7 @@ export async function browserGetText(): Promise<string> {
 export async function browserScreenshot(args: any): Promise<string> {
     try {
         const p = await ensureBrowser();
-        const savePath = `/Users/abhismac/Desktop/GravityClaw/data/sandbox/${args.path}`;
+        const savePath = `${config.sandboxPath}/${args.path}`;
         await p.screenshot({ path: savePath, fullPage: false });
         return `Screenshot saved to /sandbox/${args.path}`;
     } catch (e: any) {

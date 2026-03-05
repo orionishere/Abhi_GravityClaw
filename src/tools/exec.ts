@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { config } from '../config.js';
 
 export const execSchema = {
     type: 'function',
@@ -29,20 +30,8 @@ export async function exec(args: any): Promise<string> {
 
     try {
         // Run the command inside a Docker container with only /sandbox mounted
-        const dockerCmd = [
-            'docker', 'run',
-            '--rm',                     // Clean up after execution
-            '-v', '/Users/abhismac/Desktop/GravityClaw/data/sandbox:/sandbox',
-            '--network', 'none',        // No network access for security
-            '--memory', '256m',         // Memory limit
-            '--cpus', '1',              // CPU limit
-            'python:3.12-slim',         // Python + bash available
-            'bash', '-c', command
-        ].map(s => `"${s.replace(/"/g, '\\"')}"`).join(' ');
-
-        // Use shell execution with the raw docker command
         const result = execSync(
-            `docker run --rm -v /Users/abhismac/Desktop/GravityClaw/data/sandbox:/sandbox --network none --memory 256m --cpus 1 python:3.12-slim bash -c ${JSON.stringify(command)}`,
+            `docker run --rm -v ${config.sandboxPath}:/sandbox --network none --memory 256m --cpus 1 python:3.12-slim bash -c ${JSON.stringify(command)}`,
             {
                 timeout: timeoutSec * 1000,
                 maxBuffer: 1024 * 1024,  // 1MB output limit

@@ -23,15 +23,15 @@ function createDockerCommand(image: string, command: string, args: string[], env
             "run",
             "-i", // Critical: Keep STDIN open for the bridging protocol
             "--rm",
-            "-v", "/Users/abhismac/Desktop/GravityClaw/data/sandbox:/sandbox",
+            "-v", `${appConfig.sandboxPath}:/sandbox`,
             ...volumeArgs,
             "-e", "npm_config_update_notifier=false", // Suppress breaking stdout notices
             ...envArgs,
             image,
             command,
             ...args.map(arg => arg
-                .replace("/Users/abhismac/Desktop/GravityClaw/data/sandbox", "/sandbox")
-                .replace("/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw", "/obsidian")
+                .replace(appConfig.sandboxPath, "/sandbox")
+                .replace(appConfig.obsidianPath, "/obsidian")
             )
         ]
     };
@@ -41,7 +41,7 @@ export const mcpServers: Record<string, { client: Client, transport: StdioClient
 
 export async function initMCPs() {
     // Ensure the sandbox directory exists
-    const sandboxDir = "/Users/abhismac/Desktop/GravityClaw/data/sandbox";
+    const sandboxDir = appConfig.sandboxPath;
     if (!fs.existsSync(sandboxDir)) {
         fs.mkdirSync(sandboxDir, { recursive: true });
         console.log(`[MCP] Created sandbox directory at ${sandboxDir}`);
@@ -49,7 +49,7 @@ export async function initMCPs() {
 
     console.log(`[MCP] Initializing trusted server bridges...`);
 
-    const skillsPath = path.join("/Users/abhismac/Desktop/GravityClaw/data/skills.json");
+    const skillsPath = path.join(appConfig.dataPath, "skills.json");
     if (!fs.existsSync(skillsPath)) {
         console.error(`[MCP] No skills.json found at ${skillsPath}`);
         return;

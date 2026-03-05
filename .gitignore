@@ -30,3 +30,5 @@ temp/
 tmp/
 *.ogg
 *.mp3
+learnSkill.ts
+searchNpm.ts

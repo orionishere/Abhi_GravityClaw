@@ -16,8 +16,8 @@ const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 // Security: Max iteration limit on the agent loop
 const MAX_ITERATIONS = 15;
 
-// Obsidian vault paths (host-side)
-const OBSIDIAN_ROOT = '/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw';
+// Obsidian vault paths (from .env)
+const OBSIDIAN_ROOT = config.obsidianPath;
 const SOUL_PATH = path.join(OBSIDIAN_ROOT, 'SOUL.md');
 const SKILLS_DIR = path.join(OBSIDIAN_ROOT, 'skills');
 

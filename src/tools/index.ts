@@ -11,6 +11,7 @@ import {
     gmailSearchSchema, gmailReadSchema,
     gmailSearch, gmailRead
 } from './gmail.js';
+import { delegateSchema, delegate } from './delegate.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -24,7 +25,8 @@ export const tools = [
     browserTypeSchema,
     execSchema,
     gmailSearchSchema,
-    gmailReadSchema
+    gmailReadSchema,
+    delegateSchema
 ];
 
 // Export an execution router
@@ -52,6 +54,8 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await gmailSearch(args);
         case 'gmail_read':
             return await gmailRead(args);
+        case 'delegate':
+            return await delegate(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

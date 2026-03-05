@@ -151,9 +151,45 @@ async function handleGeminiFallback(text: string): Promise<string> {
     return "Error: Exceeded maximum tool iterations in fallback. The agent was safely halted.";
 }
 
-export async function handleUserMessage(text: string): Promise<string> {
-    // Append user input
-    conversationHistory.push({ role: 'user', content: text });
+// Attachment type from bot.ts
+export interface MediaAttachment {
+    type: 'image' | 'document';
+    url: string;
+    filename: string;
+    localPath: string;
+}
+
+export async function handleUserMessage(text: string, attachments: MediaAttachment[] = []): Promise<string> {
+    // Build user message content (multimodal if attachments present)
+    const imageAttachments = attachments.filter(a => a.type === 'image');
+    const docAttachments = attachments.filter(a => a.type === 'document');
+
+    if (imageAttachments.length > 0 || docAttachments.length > 0) {
+        // Multimodal message: text + images + document references
+        const contentParts: any[] = [];
+
+        // Add text (with document context if any)
+        let textContent = text || '';
+        if (docAttachments.length > 0) {
+            const docList = docAttachments.map(d => `- ${d.filename} (saved at ${d.localPath})`).join('\n');
+            textContent += `\n\nThe user uploaded these files:\n${docList}\nUse your exec or filesystem tools to read/process them.`;
+        }
+        if (textContent) {
+            contentParts.push({ type: 'text', text: textContent });
+        }
+
+        // Add images as vision content
+        for (const img of imageAttachments) {
+            contentParts.push({
+                type: 'image_url',
+                image_url: { url: img.url, detail: 'auto' }
+            });
+        }
+
+        conversationHistory.push({ role: 'user', content: contentParts });
+    } else {
+        conversationHistory.push({ role: 'user', content: text });
+    }
 
     let iterations = 0;
 

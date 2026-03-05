@@ -2,6 +2,8 @@ import { Client, Events, GatewayIntentBits, Partials, AttachmentBuilder } from '
 import { config } from './config.js';
 import { handleUserMessage } from './agent.js';
 import { transcribeAudio, synthesizeSpeech } from './voice.js';
+import fs from 'fs';
+import path from 'path';
 
 export const bot = new Client({
     intents: [
@@ -26,6 +28,7 @@ bot.on(Events.MessageCreate, async (message) => {
 
     let userText = message.content;
     let isVoice = false;
+    const attachments: { type: 'image' | 'document'; url: string; filename: string; localPath: string }[] = [];
 
     // Check for voice message attachments
     // Discord voice messages are typically audio/ogg files
@@ -45,12 +48,48 @@ bot.on(Events.MessageCreate, async (message) => {
         }
     }
 
-    if (!userText && !isVoice) {
+    // Handle non-audio attachments (images, documents, etc.)
+    const mediaAttachments = message.attachments.filter(a =>
+        !a.contentType?.startsWith('audio/') && !a.name?.endsWith('.ogg')
+    );
+
+    if (mediaAttachments.size > 0) {
+        // Ensure uploads directory exists
+        const uploadsDir = path.join(config.sandboxPath, 'uploads');
+        if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        for (const [, att] of mediaAttachments) {
+            const filename = att.name || `file_${Date.now()}`;
+            const localPath = path.join(uploadsDir, filename);
+            const isImage = att.contentType?.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(filename);
+
+            try {
+                // Download the file to sandbox
+                const response = await fetch(att.url);
+                const buffer = Buffer.from(await response.arrayBuffer());
+                fs.writeFileSync(localPath, buffer);
+                console.log(`[Media] Downloaded ${filename} (${att.contentType}) to ${localPath}`);
+
+                attachments.push({
+                    type: isImage ? 'image' : 'document',
+                    url: att.url,
+                    filename,
+                    localPath: `/sandbox/uploads/${filename}`
+                });
+            } catch (e: any) {
+                console.error(`[Media] Failed to download ${filename}:`, e.message);
+            }
+        }
+    }
+
+    if (!userText && !isVoice && attachments.length === 0) {
         console.log(`[Debug] Received message from ${message.author.tag}, but content and attachments are empty!`);
         return;
     }
 
-    console.log(`[Debug] Processing semantic input: "${userText}"`);
+    console.log(`[Debug] Processing semantic input: "${userText}" with ${attachments.length} attachment(s)`);
 
     // Simulate typing indicator for LLM processing
     try {
@@ -60,7 +99,7 @@ bot.on(Events.MessageCreate, async (message) => {
     }
 
     try {
-        const reply = await handleUserMessage(userText);
+        const reply = await handleUserMessage(userText, attachments);
 
         let audioAttachment = undefined;
         // If the user spoke to us, we speak back (Voice-in -> Voice-out)

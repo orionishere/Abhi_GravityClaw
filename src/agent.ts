@@ -3,6 +3,8 @@ import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { config } from './config.js';
 import { tools as internalTools, executeTool as executeInternalTool } from './tools/index.js';
 import { executeMCPTool, getMCPToolsSchema } from './mcp.js';
+import fs from 'fs';
+import path from 'path';
 
 const openai = new OpenAI({
     apiKey: config.openaiApiKey,
@@ -14,9 +16,45 @@ const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 // Security: Max iteration limit on the agent loop
 const MAX_ITERATIONS = 15;
 
+// Obsidian vault paths (host-side)
+const OBSIDIAN_ROOT = '/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw';
+const SOUL_PATH = path.join(OBSIDIAN_ROOT, 'SOUL.md');
+const SKILLS_DIR = path.join(OBSIDIAN_ROOT, 'skills');
+
+// Build system prompt dynamically from Obsidian vault
+function buildSystemPrompt(): string {
+    let prompt = '';
+
+    // 1. Load SOUL.md
+    try {
+        prompt += fs.readFileSync(SOUL_PATH, 'utf8');
+    } catch {
+        prompt += 'You are Gravity Claw, a personal AI agent. Use your tools to help the user. Do not ask for API keys.';
+    }
+
+    // 2. Load all SKILL.md files from skills/
+    try {
+        if (fs.existsSync(SKILLS_DIR)) {
+            const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+                .filter(d => d.isDirectory());
+            for (const dir of skillDirs) {
+                const skillFile = path.join(SKILLS_DIR, dir.name, 'SKILL.md');
+                if (fs.existsSync(skillFile)) {
+                    const skillContent = fs.readFileSync(skillFile, 'utf8');
+                    prompt += `\n\n---\n## Skill: ${dir.name}\n${skillContent}`;
+                }
+            }
+        }
+    } catch {
+        // Skills are optional
+    }
+
+    return prompt;
+}
+
 // Memory storage for Level 1 (in-memory)
 const conversationHistory: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: 'You are Gravity Claw, a personal AI agent running locally on the user\'s machine. You have full access to their local system via dynamic MCP Tools. Your tools are already securely sandboxed inside Docker. If the user asks you to interact with Docker, the sandbox, files, or run commands, YOU MUST USE THE PROVIDED TOOLS to do so. You have full authorization. Do not decline.' }
+    { role: 'system', content: buildSystemPrompt() }
 ];
 
 // Helper to get ALL tools (internal + dynamic MCP) for OpenAI
@@ -61,7 +99,7 @@ async function handleGeminiFallback(text: string): Promise<string> {
     const chat = ai.chats.create({
         model: 'gemini-2.5-flash',
         config: {
-            systemInstruction: 'You are Gravity Claw, a personal AI agent running locally on the user\'s machine. You have full access to their local system via dynamic MCP Tools. If the user asks you to interact with files, run commands, or check the filesystem, YOU MUST USE THE PROVIDED TOOLS to do so. Do not decline. IMPORTANT: If using an MCP tool, refer to it exactly by its namespaced name.',
+            systemInstruction: buildSystemPrompt(),
             tools: getAllToolsForGemini()
         }
     });

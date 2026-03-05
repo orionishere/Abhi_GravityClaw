@@ -37,35 +37,7 @@ function createDockerCommand(image: string, command: string, args: string[], env
     };
 }
 
-// Hardcoded explicit list of MCP servers we trust and want to run
-export const mcpConfig = {
-    servers: {
-        "filesystem-mcp": createDockerCommand("node:18-alpine", "npx", [
-            "-y",
-            "@modelcontextprotocol/server-filesystem",
-            "/sandbox",
-            "/obsidian"
-        ], {}, ["/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw:/obsidian"]),
-        "puppeteer-mcp": createDockerCommand("node:18", "npx", [
-            "-y",
-            "@modelcontextprotocol/server-puppeteer"
-        ]),
-        "gmail-mcp": createDockerCommand("node:18-alpine", "npx", [
-            "-y",
-            "@node2flow/gmail-mcp"
-        ], {
-            "GMAIL_USER": appConfig.gmailUser,
-            "GMAIL_APP_PASSWORD": appConfig.gmailAppPassword
-        }),
-    }
-};
-
-interface MCPServerInstance {
-    client: Client;
-    tools: any[];
-}
-
-export const mcpServers: Record<string, MCPServerInstance> = {};
+export const mcpServers: Record<string, { client: Client, transport: StdioClientTransport, tools: any[] }> = {};
 
 export async function initMCPs() {
     // Ensure the sandbox directory exists
@@ -77,8 +49,51 @@ export async function initMCPs() {
 
     console.log(`[MCP] Initializing trusted server bridges...`);
 
-    for (const [serverName, config] of Object.entries(mcpConfig.servers)) {
+    const skillsPath = path.join("/Users/abhismac/Desktop/GravityClaw/data/skills.json");
+    if (!fs.existsSync(skillsPath)) {
+        console.error(`[MCP] No skills.json found at ${skillsPath}`);
+        return;
+    }
+
+    const skillsRaw = fs.readFileSync(skillsPath, 'utf8');
+    let skillsConfig;
+    try {
+        skillsConfig = JSON.parse(skillsRaw);
+    } catch (e) {
+        console.error(`[MCP] Failed to parse skills.json`, e);
+        return;
+    }
+
+    // Process each skill entry
+    for (const skill of skillsConfig) {
         try {
+            // Replace simple env mappings from process.env if they exist
+            const resolvedEnv: Record<string, string> = {};
+            if (skill.env) {
+                for (const [k, v] of Object.entries(skill.env)) {
+                    // Extremely basic variable interpolation for strings like "${GMAIL_USER}"
+                    const matchedStr = String(v).match(/^\${(.*?)}$/);
+                    if (matchedStr) {
+                        resolvedEnv[k] = process.env[matchedStr[1]] || '';
+                    } else {
+                        resolvedEnv[k] = String(v);
+                    }
+                }
+            }
+
+            const dockerArgs = ["-y", skill.package];
+            if (skill.args && Array.isArray(skill.args)) {
+                dockerArgs.push(...skill.args);
+            }
+
+            const config = createDockerCommand(
+                skill.image || "node:18",
+                "npx",
+                dockerArgs,
+                resolvedEnv,
+                skill.volumes || []
+            );
+
             const transport = new StdioClientTransport({
                 command: config.command,
                 args: config.args
@@ -93,16 +108,29 @@ export async function initMCPs() {
 
             // Fetch available tools from this MCP server
             const toolsList = await client.listTools();
-            console.log(`[MCP] Connected to ${serverName}. Loaded ${toolsList.tools.length} dynamic tools.`);
+            console.log(`[MCP] Connected to ${skill.name}. Loaded ${toolsList.tools.length} dynamic tools.`);
 
-            mcpServers[serverName] = {
+            mcpServers[skill.name] = {
                 client,
+                transport,
                 tools: toolsList.tools
             };
         } catch (e: any) {
-            console.error(`[MCP] Failed to initialize server ${serverName}:`, e.message);
+            console.error(`[MCP] Failed to initialize server ${skill.name}:`, e.message);
         }
     }
+}
+
+// Function to cleanly reload all MCP connections
+export async function reloadMCPServers() {
+    console.log(`[MCP] Shutting down existing connections to reload skills...`);
+    for (const [name, instance] of Object.entries(mcpServers)) {
+        try {
+            await instance.transport.close();
+        } catch (e) { /* ignore cleanup errors */ }
+        delete mcpServers[name];
+    }
+    await initMCPs();
 }
 
 // Transform MCP tools into OpenAI schema format
@@ -146,6 +174,14 @@ export async function executeMCPTool(namespacedName: string, args: any): Promise
         arguments: args
     });
 
+    // Debug: log raw result
+    console.log(`[MCP-Debug] Raw result from ${serverName}/${actualToolName}:`, JSON.stringify(result).substring(0, 500));
+
+    if (result.isError) {
+        console.error(`[MCP] Tool '${actualToolName}' returned an error:`, result.content);
+        return `MCP Tool Error: ${JSON.stringify(result.content)}`;
+    }
+
     const resultContents = result.content as any[];
     if (resultContents && resultContents.length > 0) {
         return resultContents
@@ -154,5 +190,5 @@ export async function executeMCPTool(namespacedName: string, args: any): Promise
             .join('\n');
     }
 
-    return result.isError ? "MCP Execution resulted in an error." : "MCP Tool execution completed with no output.";
+    return "MCP Tool execution completed with no output.";
 }

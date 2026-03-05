@@ -1,0 +1,14 @@
+[
+    {
+        "name": "filesystem-mcp",
+        "package": "@modelcontextprotocol/server-filesystem",
+        "image": "node:18-alpine",
+        "args": [
+            "/sandbox",
+            "/obsidian"
+        ],
+        "volumes": [
+            "/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw:/obsidian"
+        ]
+    }
+]

@@ -16,6 +16,8 @@ export const config = {
     sandboxPath: process.env.SANDBOX_PATH || './data/sandbox',
     obsidianPath: process.env.OBSIDIAN_PATH || '',
     dataPath: process.env.DATA_PATH || './data',
+    githubToken: process.env.GITHUB_TOKEN || '',
+    githubUsername: process.env.GITHUB_USERNAME || '',
 };
 
 // Validate critical configuration

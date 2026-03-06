@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { bot } from './bot.js';
 import { config } from './config.js';
 import OpenAI from 'openai';
+import { loadDynamicCrons } from './tools/cron.js';
 
 const openai = new OpenAI({
     apiKey: config.openaiApiKey,
@@ -12,6 +13,9 @@ const openai = new OpenAI({
  */
 export function initHeartbeat() {
     console.log('[Heartbeat] Proactive scheduling initialized.');
+
+    // Load dynamic cron jobs from Obsidian vault
+    loadDynamicCrons();
 
     // Morning Check-In: Runs every day at 9:00 AM
     cron.schedule('0 9 * * *', async () => {

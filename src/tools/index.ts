@@ -12,6 +12,11 @@ import {
     gmailSearch, gmailRead
 } from './gmail.js';
 import { delegateSchema, delegate } from './delegate.js';
+import { githubCreateAndPushSchema, githubCreateAndPush } from './github.js';
+import {
+    scheduleCronSchema, cancelCronSchema, listCronsSchema,
+    scheduleCron, cancelCron, listCrons
+} from './cron.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -26,7 +31,11 @@ export const tools = [
     execSchema,
     gmailSearchSchema,
     gmailReadSchema,
-    delegateSchema
+    delegateSchema,
+    githubCreateAndPushSchema,
+    scheduleCronSchema,
+    cancelCronSchema,
+    listCronsSchema
 ];
 
 // Export an execution router
@@ -56,6 +65,14 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await gmailRead(args);
         case 'delegate':
             return await delegate(args);
+        case 'github_create_and_push':
+            return await githubCreateAndPush(args);
+        case 'schedule_cron':
+            return await scheduleCron(args);
+        case 'cancel_cron':
+            return await cancelCron(args);
+        case 'list_crons':
+            return await listCrons();
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

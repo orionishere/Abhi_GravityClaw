@@ -7,13 +7,13 @@ export const execSchema = {
     type: 'function',
     function: {
         name: 'exec',
-        description: 'Execute a bash command inside a secure Docker sandbox. The command runs in an isolated container with access only to /sandbox. Persisted pip packages from your learned skills are auto-installed. Examples: "python3 script.py", "ls /sandbox", "cat /sandbox/data.txt".',
+        description: 'Execute a bash command inside a secure Docker sandbox. The command runs in an isolated container with NO network access. Only /sandbox is accessible. Persisted pip packages from your learned skills are pre-installed and available. Examples: "python3 script.py", "ls /sandbox", "cat /sandbox/data.txt".',
         parameters: {
             type: 'object',
             properties: {
                 command: {
                     type: 'string',
-                    description: 'The bash command to execute inside the Docker sandbox (e.g., "python3 /sandbox/script.py" or "pip install openpyxl && python3 -c \'import openpyxl; ...\'")'
+                    description: 'The bash command to execute inside the Docker sandbox (e.g., "python3 /sandbox/script.py")'
                 },
                 timeout: {
                     type: 'number',
@@ -25,6 +25,9 @@ export const execSchema = {
         }
     }
 };
+
+// Docker volume for persisted pip packages
+const PIP_VOLUME = 'gravityclaw-pip';
 
 // Read persisted packages from Obsidian vault
 function getPersistedPackages(): string[] {
@@ -38,21 +41,50 @@ function getPersistedPackages(): string[] {
     return [];
 }
 
+// Stage 1: Install packages WITH network into persistent Docker volume
+function installPackages(packages: string[]): void {
+    if (packages.length === 0) return;
+
+    const pkgList = packages.join(' ');
+    console.log(`[Exec] Stage 1: Installing packages [${pkgList}] into persistent volume...`);
+
+    try {
+        execSync(
+            `docker run --rm -v ${PIP_VOLUME}:/pip-packages python:3.12-slim pip install --target=/pip-packages -q ${pkgList}`,
+            {
+                timeout: 120000, // 2 minutes for installs
+                encoding: 'utf8',
+                stdio: 'pipe'
+            }
+        );
+        console.log(`[Exec] Stage 1: Packages installed successfully.`);
+    } catch (e: any) {
+        console.error(`[Exec] Stage 1: Package install warning: ${e.stderr || e.message}`);
+        // Don't throw — some packages may already be installed, continue to Stage 2
+    }
+}
+
 export async function exec(args: any): Promise<string> {
     const command = args.command;
     const timeoutSec = Math.min(args.timeout || 30, 120);
 
-    // Build the full command with persisted package installs
+    // Stage 1: Install any persisted packages (with network access)
     const packages = getPersistedPackages();
-    let fullCommand = command;
-    if (packages.length > 0) {
-        const pipInstall = `pip install -q ${packages.join(' ')} 2>/dev/null`;
-        fullCommand = `${pipInstall} && ${command}`;
-    }
+    installPackages(packages);
 
+    // Stage 2: Run the user's command WITHOUT network, with pre-installed packages available
     try {
         const result = execSync(
-            `docker run --rm -v ${config.sandboxPath}:/sandbox --network none --memory 256m --cpus 1 python:3.12-slim bash -c ${JSON.stringify(fullCommand)}`,
+            [
+                'docker run --rm',
+                `--network none`,             // No network for user commands
+                `--memory 256m --cpus 1`,       // Resource limits
+                `-v ${config.sandboxPath}:/sandbox`,         // User files
+                `-v ${PIP_VOLUME}:/pip-packages`,            // Pre-installed packages
+                `-e PYTHONPATH=/pip-packages`,               // Python can find the packages
+                `python:3.12-slim`,
+                `bash -c ${JSON.stringify(command)}`
+            ].join(' '),
             {
                 timeout: timeoutSec * 1000,
                 maxBuffer: 1024 * 1024,
@@ -68,4 +100,3 @@ export async function exec(args: any): Promise<string> {
         return `Exec error: ${e.message}`;
     }
 }
-

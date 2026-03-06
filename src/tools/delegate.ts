@@ -1,9 +1,11 @@
 import OpenAI from 'openai';
+import { GoogleGenAI, FunctionDeclaration } from '@google/genai';
 import { config } from '../config.js';
 import { tools as internalTools, executeTool as executeInternalTool } from './index.js';
 import { executeMCPTool, getMCPToolsSchema } from '../mcp.js';
 
 const openai = new OpenAI({ apiKey: config.openaiApiKey });
+const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
 // Sub-agent iteration limit (tighter than parent's 15)
 const SUB_AGENT_MAX_ITERATIONS = 5;
@@ -35,9 +37,22 @@ export const delegateSchema = {
 // Helper to get all tools EXCEPT delegate (prevents recursive delegation)
 function getSubAgentTools(): OpenAI.Chat.ChatCompletionTool[] {
     const mcpTools = getMCPToolsSchema();
-    // Include all internal tools EXCEPT delegate itself
     const safeInternalTools = internalTools.filter((t: any) => t.function.name !== 'delegate');
     return [...safeInternalTools, ...mcpTools] as OpenAI.Chat.ChatCompletionTool[];
+}
+
+// Convert tools to Gemini format
+function getSubAgentToolsForGemini() {
+    return [{
+        functionDeclarations: getSubAgentTools().map(t => {
+            const decl: FunctionDeclaration = {
+                name: t.function.name,
+                description: t.function.description || '',
+                parameters: t.function.parameters as any
+            };
+            return decl;
+        })
+    }];
 }
 
 // Sub-agent tool execution router (same as parent, minus delegate)
@@ -51,7 +66,67 @@ async function routeSubAgentTool(name: string, args: any): Promise<any> {
     }
 }
 
-// Main executor
+// Gemini-based sub-agent (fallback when OpenAI is rate-limited)
+async function delegateViaGemini(subAgentPrompt: string, task: string): Promise<string> {
+    console.log('[Swarm] Switching sub-agent to Gemini fallback...');
+
+    const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: {
+            systemInstruction: subAgentPrompt,
+            tools: getSubAgentToolsForGemini()
+        }
+    });
+
+    let iterations = 0;
+    let nextInput: any = { message: task };
+
+    while (iterations < SUB_AGENT_MAX_ITERATIONS) {
+        iterations++;
+        console.log(`[Swarm-Gemini] Sub-agent iteration ${iterations}/${SUB_AGENT_MAX_ITERATIONS}...`);
+
+        try {
+            const response = await chat.sendMessage(nextInput);
+
+            if (response.functionCalls && response.functionCalls.length > 0) {
+                const functionResponses = [];
+
+                for (const call of response.functionCalls) {
+                    console.log(`[Swarm-Gemini] Sub-agent calling tool: ${call.name}`);
+                    try {
+                        const result = await routeSubAgentTool(call.name!, call.args);
+                        const output = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+                        functionResponses.push({
+                            name: call.name!,
+                            response: { result: output }
+                        });
+                    } catch (error: any) {
+                        console.error(`[Swarm-Gemini] Sub-agent tool error (${call.name}):`, error.message);
+                        functionResponses.push({
+                            name: call.name!,
+                            response: { error: error.message }
+                        });
+                    }
+                }
+
+                nextInput = { message: functionResponses };
+                continue;
+            } else {
+                const text = response.text || '[Sub-agent completed with no output]';
+                console.log(`[Swarm-Gemini] Sub-agent completed task in ${iterations} iteration(s).`);
+                return `[Sub-agent result (Gemini)]\n${text}`;
+            }
+
+        } catch (error: any) {
+            console.error('[Swarm-Gemini] Sub-agent error:', error.message);
+            return `[Sub-agent error (Gemini)] ${error.message}`;
+        }
+    }
+
+    return '[Sub-agent reached iteration limit without completing the task]';
+}
+
+// Main executor — uses Gemini directly (token-efficient)
 export async function delegate(args: any): Promise<string> {
     const { task, context } = args;
 
@@ -66,69 +141,7 @@ Do NOT ask for clarification. Do your best with the information provided.
 ${context ? `Context: ${context}\n` : ''}
 Task: ${task}`;
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: 'system', content: subAgentPrompt },
-        { role: 'user', content: task }
-    ];
-
-    const tools = getSubAgentTools();
-    let iterations = 0;
-
-    while (iterations < SUB_AGENT_MAX_ITERATIONS) {
-        iterations++;
-        console.log(`[Swarm] Sub-agent iteration ${iterations}/${SUB_AGENT_MAX_ITERATIONS}...`);
-
-        try {
-            const response = await openai.chat.completions.create({
-                model: 'gpt-4o',
-                messages,
-                // @ts-ignore
-                tools,
-                tool_choice: 'auto'
-            });
-
-            const choice = response.choices[0];
-            const message = choice.message;
-
-            messages.push(message);
-
-            // If the sub-agent wants to call tools
-            if (message.tool_calls && message.tool_calls.length > 0) {
-                for (const toolCall of message.tool_calls) {
-                    console.log(`[Swarm] Sub-agent calling tool: ${toolCall.function.name}`);
-                    try {
-                        const toolArgs = JSON.parse(toolCall.function.arguments);
-                        const result = await routeSubAgentTool(toolCall.function.name, toolArgs);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-                        });
-                    } catch (error: any) {
-                        console.error(`[Swarm] Sub-agent tool error (${toolCall.function.name}):`, error.message);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: `Error: ${error.message}`,
-                        });
-                    }
-                }
-                continue;
-            }
-
-            // Sub-agent returned a final text response
-            if (message.content) {
-                console.log(`[Swarm] Sub-agent completed task in ${iterations} iteration(s).`);
-                return `[Sub-agent result]\n${message.content}`;
-            }
-
-            return '[Sub-agent completed with no output]';
-
-        } catch (error: any) {
-            console.error(`[Swarm] Sub-agent error:`, error.message);
-            return `[Sub-agent error] ${error.message}`;
-        }
-    }
-
-    return '[Sub-agent reached iteration limit without completing the task]';
+    // Sub-agents always use Gemini (free, no token cost)
+    return await delegateViaGemini(subAgentPrompt, task);
 }
+

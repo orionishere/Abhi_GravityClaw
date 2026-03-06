@@ -1,6 +1,6 @@
 import { Client, Events, GatewayIntentBits, Partials, AttachmentBuilder } from 'discord.js';
 import { config } from './config.js';
-import { handleUserMessage } from './agent.js';
+import { handleUserMessage, resetConversation } from './agent.js';
 import { transcribeAudio, synthesizeSpeech } from './voice.js';
 import fs from 'fs';
 import path from 'path';
@@ -29,6 +29,13 @@ bot.on(Events.MessageCreate, async (message) => {
     let userText = message.content;
     let isVoice = false;
     const attachments: { type: 'image' | 'document'; url: string; filename: string; localPath: string }[] = [];
+
+    // Handle /reset command
+    if (userText.trim().toLowerCase() === '/reset') {
+        resetConversation();
+        await message.reply('🔄 Conversation history cleared. Starting fresh!');
+        return;
+    }
 
     // Check for voice message attachments
     // Discord voice messages are typically audio/ogg files

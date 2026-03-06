@@ -1,12 +1,10 @@
 import cron from 'node-cron';
 import { bot } from './bot.js';
 import { config } from './config.js';
-import OpenAI from 'openai';
+import { GoogleGenAI } from '@google/genai';
 import { loadDynamicCrons } from './tools/cron.js';
 
-const openai = new OpenAI({
-    apiKey: config.openaiApiKey,
-});
+const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
 /**
  * Initializes all proactive scheduled tasks for the agent.
@@ -23,18 +21,13 @@ export function initHeartbeat() {
             console.log('[Heartbeat] Triggering Daily Morning Check-in...');
             const user = await bot.users.fetch(config.discordUserId);
 
-            // Generate a fresh, contextual greeting using the LLM instead of a static string
-            const response = await openai.chat.completions.create({
-                model: 'gpt-4o',
-                messages: [
-                    { role: 'system', content: 'You are Gravity Claw, a personal AI agent.' },
-                    { role: 'user', content: 'Generate a short, friendly, proactive 1-2 sentence morning greeting to wake up the user and ask them if they need any briefings or tasks handled for the day. Do not use quotes.' }
-                ],
-                max_tokens: 100
+            // Use Gemini Flash for heartbeats (free, lightweight)
+            const result = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: 'You are Gravity Claw, a personal AI agent. Generate a short, friendly, proactive 1-2 sentence morning greeting to wake up the user and ask them if they need any briefings or tasks handled for the day. Do not use quotes.'
             });
 
-            const greeting = response.choices[0]?.message?.content || "Good morning! Would you like a briefing for the day?";
-
+            const greeting = result.text || "Good morning! Would you like a briefing for the day?";
             await user.send(greeting);
 
         } catch (error) {

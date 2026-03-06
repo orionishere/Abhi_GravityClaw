@@ -119,7 +119,7 @@ export async function browserNavigate(args: any): Promise<string> {
         const title = await p.title();
         // Return a truncated version of the text to fit in context
         const text = await p.innerText('body').catch(() => '');
-        const truncated = text.substring(0, 8000);
+        const truncated = text.substring(0, 3000);
         return `Navigated to: ${args.url}\nTitle: ${title}\n\nPage content:\n${truncated}`;
     } catch (e: any) {
         return `Browser navigation failed: ${e.message}`;
@@ -130,7 +130,7 @@ export async function browserGetText(): Promise<string> {
     try {
         const p = await ensureBrowser();
         const text = await p.innerText('body').catch(() => '');
-        return text.substring(0, 8000);
+        return text.substring(0, 3000);
     } catch (e: any) {
         return `Failed to get page text: ${e.message}`;
     }

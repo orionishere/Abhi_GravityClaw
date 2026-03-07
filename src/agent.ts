@@ -3,6 +3,7 @@ import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { config } from './config.js';
 import { tools as internalTools, executeTool as executeInternalTool } from './tools/index.js';
 import { executeMCPTool, getMCPToolsSchema } from './mcp.js';
+import { getPreconsciousBuffer } from './observe.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -126,6 +127,12 @@ function buildSystemPrompt(): string {
         }
     } catch {
         // Skills are optional
+    }
+
+    // 3. Inject preconscious buffer (background observations)
+    const buffer = getPreconsciousBuffer();
+    if (buffer) {
+        prompt += buffer;
     }
 
     return prompt;

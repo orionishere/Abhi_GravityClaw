@@ -3,6 +3,7 @@ import { bot } from './bot.js';
 import { config } from './config.js';
 import { GoogleGenAI } from '@google/genai';
 import { loadDynamicCrons } from './tools/cron.js';
+import { runObservation, cleanupOldObservations } from './observe.js';
 
 const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
@@ -35,5 +36,31 @@ export function initHeartbeat() {
         }
     });
 
-    // NOTE: Add additional heartbeat triggers here (e.g. weekly summaries, bedtime reminders, etc.)
+    // Background Observation: Every 6 hours (midnight, 6am, noon, 6pm)
+    cron.schedule('0 */6 * * *', async () => {
+        try {
+            await runObservation();
+        } catch (error) {
+            console.error('[Heartbeat] Observation failed:', error);
+        }
+    });
+
+    // Daily Cleanup: Expire old observations at 3:00 AM
+    cron.schedule('0 3 * * *', () => {
+        try {
+            cleanupOldObservations();
+        } catch (error) {
+            console.error('[Heartbeat] Observation cleanup failed:', error);
+        }
+    });
+
+    // Run an initial observation on boot (so there's data immediately)
+    setTimeout(async () => {
+        try {
+            console.log('[Heartbeat] Running initial observation on boot...');
+            await runObservation();
+        } catch (error) {
+            console.error('[Heartbeat] Initial observation failed:', error);
+        }
+    }, 10000); // 10 seconds after boot
 }

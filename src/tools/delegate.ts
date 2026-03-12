@@ -109,7 +109,7 @@ async function delegateViaGemini(subAgentPrompt: string, task: string): Promise<
                     }
                 }
 
-                nextInput = { message: functionResponses };
+                nextInput = { message: functionResponses.map((r: any) => ({ functionResponse: r })) };
                 continue;
             } else {
                 const text = response.text || '[Sub-agent completed with no output]';

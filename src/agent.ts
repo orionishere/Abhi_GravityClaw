@@ -7,6 +7,26 @@ import { getPreconsciousBuffer } from './observe.js';
 import fs from 'fs';
 import path from 'path';
 
+// Budget persistence
+const BUDGET_FILE = path.join(config.dataPath, 'budget.json');
+
+function loadBudget(): { heavyCallsToday: number; budgetResetDate: string } {
+    try {
+        if (fs.existsSync(BUDGET_FILE)) {
+            return JSON.parse(fs.readFileSync(BUDGET_FILE, 'utf8'));
+        }
+    } catch { }
+    return { heavyCallsToday: 0, budgetResetDate: new Date().toDateString() };
+}
+
+function saveBudget(): void {
+    try {
+        fs.writeFileSync(BUDGET_FILE, JSON.stringify({ heavyCallsToday, budgetResetDate }));
+    } catch (e: any) {
+        console.error('[Router] Failed to save budget:', e.message);
+    }
+}
+
 const openai = new OpenAI({
     apiKey: config.openaiApiKey,
 });
@@ -30,21 +50,23 @@ type TaskTier = 'light' | 'analysis' | 'code';
 
 const MODEL_MAP = {
     light: 'gemini-2.5-flash',
-    analysis: 'gemini-3.1-pro-preview',
+    analysis: 'gemini-2.5-pro-preview-03-25',
     code: 'o4-mini',
     vision: 'gpt-4o'
 };
 
 // Budget: max heavy calls per day
 const HEAVY_BUDGET_PER_DAY = 10;
-let heavyCallsToday = 0;
-let budgetResetDate = new Date().toDateString();
+const _savedBudget = loadBudget();
+let heavyCallsToday = _savedBudget.heavyCallsToday;
+let budgetResetDate = _savedBudget.budgetResetDate;
 
 function checkAndResetBudget(): void {
     const today = new Date().toDateString();
     if (today !== budgetResetDate) {
         heavyCallsToday = 0;
         budgetResetDate = today;
+        saveBudget();
         console.log('[Router] Daily heavy-call budget reset.');
     }
 }
@@ -56,6 +78,7 @@ function canUseHeavyModel(): boolean {
 
 function useHeavyCall(): void {
     heavyCallsToday++;
+    saveBudget();
     console.log(`[Router] Heavy call used (${heavyCallsToday}/${HEAVY_BUDGET_PER_DAY} today).`);
 }
 
@@ -297,15 +320,21 @@ export async function handleUserMessage(text: string, attachments: MediaAttachme
 // ============================
 // GEMINI HANDLER (Flash + Pro)
 // ============================
-async function handleGeminiTask(userText: string, model: string): Promise<string> {
+async function handleGeminiTask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
     await compactConversation();
-    geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
+    if (!_alreadyPushed) {
+        geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
+    }
 
     let iterations = 0;
+    let pendingFunctionResponses: any[] = [];
     const chat = ai.chats.create({
         model: model,
         config: {
-            systemInstruction: buildSystemPrompt(),
+            systemInstruction: {
+                role: 'system',
+                parts: [{ text: buildSystemPrompt() }]
+            },
             tools: getAllToolsForGemini()
         },
         history: geminiHistory.slice(0, -1)
@@ -316,44 +345,42 @@ async function handleGeminiTask(userText: string, model: string): Promise<string
         console.log(`[Agent-${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
 
         try {
-            const inputMsg = iterations === 1
-                ? { message: userText }
-                : (geminiHistory[geminiHistory.length - 1] as any);
-
-            const response = await chat.sendMessage(inputMsg);
+            // First iteration: send the user's text
+            // Subsequent iterations: send accumulated function responses from prior tool calls
+            let response;
+            if (iterations === 1) {
+                response = await chat.sendMessage({ message: userText });
+            } else {
+                response = await chat.sendMessage({
+                    message: pendingFunctionResponses.map(pr => ({ functionResponse: pr }))
+                });
+            }
 
             sessionTokenEstimate += Math.round((userText.length + (response.text?.length || 0)) / 4);
 
             if (response.functionCalls && response.functionCalls.length > 0) {
-                const functionResponses = [];
+                pendingFunctionResponses = [];
 
                 for (const call of response.functionCalls) {
                     console.log(`[Agent-${model}] Calling tool: ${call.name}`);
                     try {
                         const result = await routeToolExecution(call.name!, call.args);
                         const output = truncateResult(result);
-                        functionResponses.push({
+                        pendingFunctionResponses.push({
+                            id: call.id,
                             name: call.name!,
                             response: { result: output }
                         });
                     } catch (error: any) {
                         console.error(`[Agent-${model}] Tool error (${call.name}):`, error.message);
-                        functionResponses.push({
+                        pendingFunctionResponses.push({
+                            id: call.id,
                             name: call.name!,
                             response: { error: error.message }
                         });
                     }
                 }
-
-                const nextResponse = await chat.sendMessage({ message: functionResponses as any });
-
-                if (!nextResponse.functionCalls || nextResponse.functionCalls.length === 0) {
-                    const reply = nextResponse.text || 'Task completed.';
-                    geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
-                    console.log(`[Token] Session estimate: ~${sessionTokenEstimate} tokens`);
-                    return reply;
-                }
-                continue;
+                continue; // Loop back to send pendingFunctionResponses
 
             } else {
                 const reply = response.text || 'No response generated.';
@@ -368,8 +395,8 @@ async function handleGeminiTask(userText: string, model: string): Promise<string
             // If Pro fails, try Flash as fallback
             if (model !== MODEL_MAP.light) {
                 console.log(`[Router] ${model} failed, falling back to Flash...`);
-                geminiHistory.pop(); // Remove the user message we added
-                return await handleGeminiTask(userText, MODEL_MAP.light);
+                // Pass _alreadyPushed=true so the user message isn't duplicated
+                return await handleGeminiTask(userText, MODEL_MAP.light, true);
             }
 
             return `Sorry, I encountered an error: ${error.message}`;
@@ -386,6 +413,7 @@ async function handleCodeTask(userText: string): Promise<string> {
     console.log(`[Agent-o4-mini] Processing code task...`);
 
     await compactConversation();
+    // Push to history now; if we fall back, pass _alreadyPushed=true
     geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
 
     try {
@@ -449,10 +477,9 @@ async function handleCodeTask(userText: string): Promise<string> {
     } catch (error: any) {
         console.error('[Agent-o4-mini] Error:', error.message);
 
-        // Fallback: if o4-mini fails, try Gemini Pro
+        // Fallback: if o4-mini fails, try Gemini Pro (history already pushed)
         console.log('[Router] o4-mini failed, falling back to Gemini Pro...');
-        geminiHistory.pop(); // Remove user message we added
-        return await handleGeminiTask(userText, MODEL_MAP.analysis);
+        return await handleGeminiTask(userText, MODEL_MAP.analysis, true);
     }
 }
 
@@ -480,19 +507,64 @@ async function handleVisionMessage(text: string, images: MediaAttachment[], docs
     }
 
     try {
-        const response = await openai.chat.completions.create({
-            model: MODEL_MAP.vision,
-            messages: [
-                { role: 'system', content: buildSystemPrompt() },
-                { role: 'user', content: contentParts }
-            ],
-            max_tokens: 1000
-        });
+        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+            { role: 'system', content: buildSystemPrompt() },
+            { role: 'user', content: contentParts }
+        ];
 
-        const reply = response.choices[0]?.message?.content || 'I can see the image but generated no response.';
+        let iterations = 0;
+        let finalReply = '';
+
+        // Full agentic tool-call loop for vision
+        while (iterations < MAX_ITERATIONS) {
+            iterations++;
+            console.log(`[Agent-GPT4o] Vision iteration ${iterations}/${MAX_ITERATIONS}...`);
+
+            const response = await openai.chat.completions.create({
+                model: MODEL_MAP.vision,
+                messages,
+                // @ts-ignore
+                tools: getAllToolsForOpenAI(),
+                tool_choice: 'auto',
+                max_tokens: 2000
+            });
+
+            const message = response.choices[0]?.message;
+            if (!message) break;
+            messages.push(message);
+
+            if (message.tool_calls && message.tool_calls.length > 0) {
+                for (const toolCall of message.tool_calls) {
+                    console.log(`[Agent-GPT4o] Calling tool: ${toolCall.function.name}`);
+                    try {
+                        const args = JSON.parse(toolCall.function.arguments);
+                        const result = await routeToolExecution(toolCall.function.name, args);
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            content: truncateResult(result),
+                        });
+                    } catch (error: any) {
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            content: `Error: ${error.message}`,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            finalReply = message.content || 'I can see the image but generated no response.';
+            break;
+        }
+
+        if (!finalReply) finalReply = 'Vision task reached iteration limit without a final response.';
+
         geminiHistory.push({ role: 'user', parts: [{ text: text || 'User sent an image.' }] });
-        geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
-        return reply;
+        geminiHistory.push({ role: 'model', parts: [{ text: finalReply }] });
+        return finalReply;
+
     } catch (e: any) {
         return `Vision processing error: ${e.message}`;
     }

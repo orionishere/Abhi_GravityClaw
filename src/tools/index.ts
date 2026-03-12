@@ -17,6 +17,7 @@ import {
     scheduleCronSchema, cancelCronSchema, listCronsSchema,
     scheduleCron, cancelCron, listCrons
 } from './cron.js';
+import { learnSkillSchema, learnSkill } from './learnSkill.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -35,7 +36,8 @@ export const tools = [
     githubCreateAndPushSchema,
     scheduleCronSchema,
     cancelCronSchema,
-    listCronsSchema
+    listCronsSchema,
+    learnSkillSchema
 ];
 
 // Export an execution router
@@ -73,6 +75,8 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await cancelCron(args);
         case 'list_crons':
             return await listCrons();
+        case 'learn_skill':
+            return await learnSkill(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

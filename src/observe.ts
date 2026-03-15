@@ -1,10 +1,8 @@
-import { GoogleGenAI } from '@google/genai';
 import { config } from './config.js';
 import { db } from './db.js';
+import { handleHeartbeatTask } from './agent.js';
 import fs from 'fs';
 import path from 'path';
-
-const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
 const OBSERVATIONS_DIR = path.join(config.obsidianPath, 'observations');
 
@@ -114,16 +112,12 @@ Examples:
 Write ONLY the observations, one per line. No headers or extra formatting.`;
 
     try {
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
-
-        const observations = result.text?.trim() || '🟢 No notable observations at this time.';
+        // Routes Claude Haiku → OpenAI mini → Gemini Flash automatically
+        const observations = await handleHeartbeatTask(prompt);
 
         // Append to today's file
         const filePath = path.join(OBSERVATIONS_DIR, `${today()}.md`);
-        const entry = `\n### ${nowTime()}\n${observations}\n`;
+        const entry = `\n### ${nowTime()}\n${observations.trim()}\n`;
 
         if (fs.existsSync(filePath)) {
             fs.appendFileSync(filePath, entry);
@@ -132,7 +126,6 @@ Write ONLY the observations, one per line. No headers or extra formatting.`;
         }
 
         console.log(`[Observe] Saved observations to ${today()}.md`);
-
     } catch (e: any) {
         console.error('[Observe] Observation failed:', e.message);
     }

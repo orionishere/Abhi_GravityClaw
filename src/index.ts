@@ -2,6 +2,7 @@ import { startBot, stopBot } from './bot.js';
 import { initDb } from './db.js';
 import { initMCPs } from './mcp.js';
 import { initHeartbeat } from './heartbeat.js';
+import { initModelSelector } from './modelSelector.js';
 
 async function main() {
     console.log('Booting Gravity Claw...');
@@ -14,6 +15,9 @@ async function main() {
 
     // Initialize internal dependencies
     initDb();
+
+    // Auto-select best available models from each provider (cached 15 days)
+    await initModelSelector();
 
     // Initialize external plugins/MCP systems BEFORE starting the bot
     await initMCPs();

@@ -18,6 +18,12 @@ import {
     scheduleCron, cancelCron, listCrons
 } from './cron.js';
 import { learnSkillSchema, learnSkill } from './learnSkill.js';
+import {
+    twitterGetMyStatsSchema, twitterGetMentionsSchema, twitterGetTrendingSchema,
+    twitterSearchDeepSchema, twitterDraftThreadSchema,
+    twitterGetMyStats, twitterGetMentions, twitterGetTrending,
+    twitterSearchDeep, twitterDraftThread
+} from './twitter.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -37,7 +43,12 @@ export const tools = [
     scheduleCronSchema,
     cancelCronSchema,
     listCronsSchema,
-    learnSkillSchema
+    learnSkillSchema,
+    twitterGetMyStatsSchema,
+    twitterGetMentionsSchema,
+    twitterGetTrendingSchema,
+    twitterSearchDeepSchema,
+    twitterDraftThreadSchema
 ];
 
 // Export an execution router
@@ -77,6 +88,16 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await listCrons();
         case 'learn_skill':
             return await learnSkill(args);
+        case 'twitter_get_my_stats':
+            return await twitterGetMyStats(args);
+        case 'twitter_get_mentions':
+            return await twitterGetMentions(args);
+        case 'twitter_get_trending':
+            return await twitterGetTrending(args);
+        case 'twitter_search_deep':
+            return await twitterSearchDeep(args);
+        case 'twitter_draft_thread':
+            return await twitterDraftThread(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

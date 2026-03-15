@@ -10,5 +10,16 @@
         "volumes": [
             "/Users/abhismac/Desktop/Obsidian_GravityClaw/GravityClaw:/obsidian"
         ]
+    },
+    {
+        "name": "twitter-mcp",
+        "package": "@enescinar/twitter-mcp",
+        "image": "node:18-alpine",
+        "env": {
+            "API_KEY": "${TWITTER_API_KEY}",
+            "API_SECRET_KEY": "${TWITTER_API_SECRET}",
+            "ACCESS_TOKEN": "${TWITTER_ACCESS_TOKEN}",
+            "ACCESS_TOKEN_SECRET": "${TWITTER_ACCESS_TOKEN_SECRET}"
+        }
     }
 ]

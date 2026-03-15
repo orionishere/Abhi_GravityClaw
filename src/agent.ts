@@ -1,281 +1,322 @@
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, FunctionDeclaration } from '@google/genai';
 import { config } from './config.js';
+import { getModel } from './modelSelector.js';
 import { tools as internalTools, executeTool as executeInternalTool } from './tools/index.js';
 import { executeMCPTool, getMCPToolsSchema } from './mcp.js';
 import { getPreconsciousBuffer } from './observe.js';
 import fs from 'fs';
 import path from 'path';
 
-// Budget persistence
+// ============================
+// CLIENTS
+// ============================
+const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+const openai = new OpenAI({ apiKey: config.openaiApiKey });
+const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+// ============================
+// CONSTANTS
+// ============================
+const MAX_ITERATIONS = 15;
+const MAX_TOOL_RESULT_LENGTH = 4000;
+const COMPACTION_CHAR_THRESHOLD = 50000;
+
+// ============================
+// TIER ROUTING
+// ============================
+type TaskTier = 'analysis' | 'code' | 'light' | 'heartbeat';
+
+// MODEL_MAP reads live from modelSelector (auto-discovers best available models)
+// Env-var overrides in .env always win. Falls back to hardcoded defaults.
+function getModelMap() {
+    return {
+        claude: {
+            analysis:  getModel('anthropic', 'analysis'),
+            code:      getModel('anthropic', 'code'),
+            light:     getModel('anthropic', 'light'),
+            heartbeat: getModel('anthropic', 'heartbeat'),
+        },
+        openai: {
+            analysis:  getModel('openai', 'analysis'),
+            code:      getModel('openai', 'code'),
+            light:     getModel('openai', 'light'),
+            heartbeat: getModel('openai', 'heartbeat'),
+        },
+        gemini: {
+            analysis:  getModel('gemini', 'analysis'),
+            code:      getModel('gemini', 'code'),
+            light:     getModel('gemini', 'light'),
+            heartbeat: getModel('gemini', 'heartbeat'),
+        }
+    };
+}
+
+// ============================
+// BUDGET (heavy model cap)
+// ============================
 const BUDGET_FILE = path.join(config.dataPath, 'budget.json');
 
 function loadBudget(): { heavyCallsToday: number; budgetResetDate: string } {
     try {
-        if (fs.existsSync(BUDGET_FILE)) {
-            return JSON.parse(fs.readFileSync(BUDGET_FILE, 'utf8'));
-        }
+        if (fs.existsSync(BUDGET_FILE)) return JSON.parse(fs.readFileSync(BUDGET_FILE, 'utf8'));
     } catch { }
     return { heavyCallsToday: 0, budgetResetDate: new Date().toDateString() };
 }
 
 function saveBudget(): void {
-    try {
-        fs.writeFileSync(BUDGET_FILE, JSON.stringify({ heavyCallsToday, budgetResetDate }));
-    } catch (e: any) {
-        console.error('[Router] Failed to save budget:', e.message);
-    }
+    try { fs.writeFileSync(BUDGET_FILE, JSON.stringify({ heavyCallsToday, budgetResetDate })); } catch { }
 }
 
-const openai = new OpenAI({
-    apiKey: config.openaiApiKey,
-});
-
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
-
-// Security: Max iteration limit on the agent loop
-const MAX_ITERATIONS = 15;
-
-// Token optimization: Max characters for a single tool result
-const MAX_TOOL_RESULT_LENGTH = 4000;
-
-// Token optimization: Approximate token threshold for compaction
-const COMPACTION_CHAR_THRESHOLD = 50000; // ~12,500 tokens
-
-// ============================
-// SMART ROUTING CONFIG
-// ============================
-type TaskTier = 'light' | 'analysis' | 'code';
-
-const MODEL_MAP = {
-    light: 'gemini-2.5-flash',
-    analysis: 'gemini-2.5-pro-preview-03-25',
-    code: 'o4-mini',
-    vision: 'gpt-4o'
-};
-
-// Budget: max heavy calls per day
 const HEAVY_BUDGET_PER_DAY = 10;
-const _savedBudget = loadBudget();
-let heavyCallsToday = _savedBudget.heavyCallsToday;
-let budgetResetDate = _savedBudget.budgetResetDate;
+const _saved = loadBudget();
+let heavyCallsToday = _saved.heavyCallsToday;
+let budgetResetDate = _saved.budgetResetDate;
 
 function checkAndResetBudget(): void {
     const today = new Date().toDateString();
-    if (today !== budgetResetDate) {
-        heavyCallsToday = 0;
-        budgetResetDate = today;
-        saveBudget();
-        console.log('[Router] Daily heavy-call budget reset.');
+    if (today !== budgetResetDate) { heavyCallsToday = 0; budgetResetDate = today; saveBudget(); }
+}
+
+function canUseHeavyModel(): boolean { checkAndResetBudget(); return heavyCallsToday < HEAVY_BUDGET_PER_DAY; }
+function useHeavyCall(): void { heavyCallsToday++; saveBudget(); console.log(`[Router] Heavy call used (${heavyCallsToday}/${HEAVY_BUDGET_PER_DAY} today).`); }
+
+// ============================
+// CIRCUIT BREAKERS
+// ============================
+let anthropicCooldownUntil: number | null = null;
+let geminiCooldownUntil: number | null = null;
+const COOLDOWN_MS = 60_000;
+
+function isRateLimitError(e: any): boolean {
+    const msg = (e?.message || '').toLowerCase();
+    return msg.includes('429') || msg.includes('resource_exhausted') ||
+        msg.includes('quota') || msg.includes('rate limit') ||
+        msg.includes('overloaded') || e?.status === 429;
+}
+
+function isProviderAvailable(until: number | null): boolean {
+    if (until === null) return true;
+    if (Date.now() > until) return true;
+    return false;
+}
+
+function tripBreaker(who: 'anthropic' | 'gemini', e: any): void {
+    const retryMatch = e?.message?.match(/(\d+)s/);
+    const cooldownMs = Math.max((retryMatch ? parseInt(retryMatch[1]) : 60) * 1000, COOLDOWN_MS);
+    if (who === 'anthropic') { anthropicCooldownUntil = Date.now() + cooldownMs; }
+    else { geminiCooldownUntil = Date.now() + cooldownMs; }
+    console.warn(`[Router] ⚠️ ${who} tripped. Cooling down for ${Math.round(cooldownMs / 1000)}s.`);
+}
+
+function isAnthropicAvailable(): boolean {
+    if (isProviderAvailable(anthropicCooldownUntil)) {
+        if (anthropicCooldownUntil !== null && Date.now() > anthropicCooldownUntil) {
+            anthropicCooldownUntil = null; console.log('[Router] Anthropic cooldown expired.');
+        }
+        return anthropicCooldownUntil === null;
     }
+    return false;
 }
 
-function canUseHeavyModel(): boolean {
-    checkAndResetBudget();
-    return heavyCallsToday < HEAVY_BUDGET_PER_DAY;
-}
-
-function useHeavyCall(): void {
-    heavyCallsToday++;
-    saveBudget();
-    console.log(`[Router] Heavy call used (${heavyCallsToday}/${HEAVY_BUDGET_PER_DAY} today).`);
+function isGeminiAvailable(): boolean {
+    if (isProviderAvailable(geminiCooldownUntil)) {
+        if (geminiCooldownUntil !== null && Date.now() > geminiCooldownUntil) {
+            geminiCooldownUntil = null; console.log('[Router] Gemini cooldown expired.');
+        }
+        return geminiCooldownUntil === null;
+    }
+    return false;
 }
 
 // ============================
 // TASK CLASSIFIER
 // ============================
 async function classifyTask(text: string): Promise<TaskTier> {
-    // If budget is exhausted, always use light
-    if (!canUseHeavyModel()) {
-        console.log('[Router] Heavy budget exhausted. Routing to Flash.');
-        return 'light';
-    }
+    if (!canUseHeavyModel()) return 'light';
 
-    try {
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `You are a task classifier. Given the user's message, respond with EXACTLY one word:
-- "light" if the task is simple: greetings, questions, simple lookups, file listing, reading, checking status, reminders, scheduling
-- "code" if the task involves writing code, building projects, debugging, creating scripts, programming
-- "analysis" if the task involves complex reasoning, research, deep analysis, summarization of large data, strategic planning, comparing options
+    // Use cheapest available model to classify
+    const classifyPrompt = `You are a task classifier. Respond with EXACTLY one word:
+- "analysis" if the task requires deep reasoning, strategic planning, research, or complex decision-making
+- "code" if the task involves writing code, debugging, creating scripts, or programming
+- "light" if simple: greetings, questions, lookups, file reading, status checks, reminders
 
 User message: "${text.substring(0, 500)}"
+Classification:`;
 
-Classification:`
-        });
-
-        const classification = (result.text || '').trim().toLowerCase();
-
-        if (classification.includes('code')) return 'code';
-        if (classification.includes('analysis')) return 'analysis';
-        return 'light';
-
-    } catch (e: any) {
-        console.error('[Router] Classification failed, defaulting to light:', e.message);
-        return 'light';
+    // Try Anthropic Haiku first (cheapest + fastest)
+    if (isAnthropicAvailable() && config.anthropicApiKey) {
+        try {
+            const result = await anthropic.messages.create({
+                model: config.claudeHeartbeatModel,
+                max_tokens: 10,
+                messages: [{ role: 'user', content: classifyPrompt }]
+            });
+            const classification = (result.content[0] as any)?.text?.trim().toLowerCase() || '';
+            if (classification.includes('code')) return 'code';
+            if (classification.includes('analysis')) return 'analysis';
+            return 'light';
+        } catch (e: any) {
+            if (isRateLimitError(e)) tripBreaker('anthropic', e);
+            // fall through to Gemini
+        }
     }
+
+    // Fall back to Gemini Flash for classification
+    if (isGeminiAvailable() && config.geminiApiKey) {
+        try {
+            const result = await gemini.models.generateContent({ model: config.geminiHeartbeatModel, contents: classifyPrompt });
+            const classification = (result.text || '').trim().toLowerCase();
+            if (classification.includes('code')) return 'code';
+            if (classification.includes('analysis')) return 'analysis';
+            return 'light';
+        } catch (e: any) {
+            if (isRateLimitError(e)) tripBreaker('gemini', e);
+        }
+    }
+
+    return 'light'; // safe default
 }
 
 // ============================
 // OBSIDIAN / SYSTEM PROMPT
 // ============================
-const OBSIDIAN_ROOT = config.obsidianPath;
-const SOUL_PATH = path.join(OBSIDIAN_ROOT, 'SOUL.md');
-const SKILLS_DIR = path.join(OBSIDIAN_ROOT, 'skills');
-
-// Token usage tracker
-let sessionTokenEstimate = 0;
+const SOUL_PATH = path.join(config.obsidianPath, 'SOUL.md');
+const SKILLS_DIR = path.join(config.obsidianPath, 'skills');
 
 function buildSystemPrompt(): string {
     let prompt = '';
-
-    try {
-        prompt += fs.readFileSync(SOUL_PATH, 'utf8');
-    } catch {
-        prompt += 'You are Gravity Claw, a personal AI agent. Use your tools to help the user. Do not ask for API keys.';
-    }
-
+    try { prompt += fs.readFileSync(SOUL_PATH, 'utf8'); }
+    catch { prompt += 'You are Gravity Claw, a personal AI agent. Use your tools to help the user. Do not ask for API keys.'; }
     try {
         if (fs.existsSync(SKILLS_DIR)) {
-            const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
-                .filter(d => d.isDirectory());
-            for (const dir of skillDirs) {
+            for (const dir of fs.readdirSync(SKILLS_DIR, { withFileTypes: true }).filter(d => d.isDirectory())) {
                 const skillFile = path.join(SKILLS_DIR, dir.name, 'SKILL.md');
                 if (fs.existsSync(skillFile)) {
-                    const skillContent = fs.readFileSync(skillFile, 'utf8');
-                    prompt += `\n\n---\n## Skill: ${dir.name}\n${skillContent}`;
+                    prompt += `\n\n---\n## Skill: ${dir.name}\n${fs.readFileSync(skillFile, 'utf8')}`;
                 }
             }
         }
-    } catch {
-        // Skills are optional
-    }
-
-    // 3. Inject preconscious buffer (background observations)
+    } catch { }
     const buffer = getPreconsciousBuffer();
-    if (buffer) {
-        prompt += buffer;
-    }
-
+    if (buffer) prompt += buffer;
     return prompt;
 }
 
 // ============================
-// TOOL HELPERS
+// TOOL SCHEMA CONVERTERS
 // ============================
+
+// OpenAI format (existing tool definitions)
+function getAllToolsForOpenAI(): OpenAI.Chat.ChatCompletionTool[] {
+    return [...internalTools, ...getMCPToolsSchema()] as OpenAI.Chat.ChatCompletionTool[];
+}
+
+// Anthropic format
+function getAllToolsForAnthropic(): Anthropic.Tool[] {
+    return getAllToolsForOpenAI().map(t => ({
+        name: t.function.name,
+        description: t.function.description || '',
+        input_schema: (t.function.parameters || { type: 'object', properties: {} }) as Anthropic.Tool['input_schema']
+    }));
+}
+
+// Gemini format
 function getAllToolsForGemini() {
-    const allTools = getAllToolsForOpenAI();
     return [{
-        functionDeclarations: allTools.map(t => {
-            const decl: FunctionDeclaration = {
-                name: t.function.name,
-                description: t.function.description || '',
-                parameters: t.function.parameters as any
-            };
-            return decl;
-        })
+        functionDeclarations: getAllToolsForOpenAI().map(t => ({
+            name: t.function.name,
+            description: t.function.description || '',
+            parameters: t.function.parameters as any
+        } as FunctionDeclaration))
     }];
 }
 
-function getAllToolsForOpenAI(): OpenAI.Chat.ChatCompletionTool[] {
-    const mcpTools = getMCPToolsSchema();
-    return [...internalTools, ...mcpTools] as OpenAI.Chat.ChatCompletionTool[];
-}
-
 async function routeToolExecution(name: string, args: any): Promise<any> {
-    if (name.startsWith('mcp__')) {
-        return await executeMCPTool(name, args);
-    } else {
-        return await executeInternalTool(name, args);
-    }
+    return name.startsWith('mcp__') ? await executeMCPTool(name, args) : await executeInternalTool(name, args);
 }
 
 function truncateResult(result: any): string {
     const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    if (text.length > MAX_TOOL_RESULT_LENGTH) {
-        return text.substring(0, MAX_TOOL_RESULT_LENGTH) + '\n...[truncated]';
-    }
-    return text;
-}
-
-function estimateHistoryChars(history: any[]): number {
-    let total = 0;
-    for (const msg of history) {
-        if (typeof msg.content === 'string') {
-            total += msg.content.length;
-        } else if (Array.isArray(msg.content)) {
-            for (const part of msg.content) {
-                if (part.text) total += part.text.length;
-            }
-        }
-        if (msg.tool_calls) {
-            for (const tc of msg.tool_calls) {
-                total += (tc.function?.arguments?.length || 0);
-            }
-        }
-    }
-    return total;
+    return text.length > MAX_TOOL_RESULT_LENGTH ? text.substring(0, MAX_TOOL_RESULT_LENGTH) + '\n...[truncated]' : text;
 }
 
 // ============================
-// CONVERSATION COMPACTION
+// CONVERSATION HISTORY
 // ============================
+// We maintain two parallel histories — Anthropic and Gemini formats.
+// OpenAI handler builds its own messages each time (stateless).
+const claudeHistory: Anthropic.MessageParam[] = [];
 const geminiHistory: any[] = [];
 
-async function compactConversation(): Promise<void> {
-    const charCount = estimateHistoryChars(geminiHistory);
-    if (charCount < COMPACTION_CHAR_THRESHOLD) return;
+let sessionTokenEstimate = 0;
 
-    console.log(`[Compact] History is ${Math.round(charCount / 1000)}K chars. Compacting...`);
-
-    const keepCount = Math.min(4, geminiHistory.length);
-    const toSummarize = geminiHistory.slice(0, -keepCount);
-    const toKeep = geminiHistory.slice(-keepCount);
-
-    if (toSummarize.length === 0) return;
-
-    let summaryInput = '';
-    for (const msg of toSummarize) {
-        const role = msg.role || 'unknown';
-        const content = typeof msg.content === 'string' ? msg.content :
-            Array.isArray(msg.content) ? msg.content.map((p: any) => p.text || '').join(' ') :
-                JSON.stringify(msg.content || '');
-        if (content.length > 0) {
-            summaryInput += `[${role}]: ${content.substring(0, 500)}\n`;
-        }
-    }
-
-    try {
-        const result = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `Summarize this conversation history in 2-3 concise sentences. Focus on what was discussed, what tools were used, and what was accomplished:\n\n${summaryInput.substring(0, 5000)}`
-        });
-
-        const summary = result.text || 'Previous conversation context.';
-        console.log(`[Compact] Summarized ${toSummarize.length} messages → "${summary.substring(0, 100)}..."`);
-
-        geminiHistory.length = 0;
-        geminiHistory.push({ role: 'user', parts: [{ text: `[Prior conversation summary]: ${summary}` }] });
-        geminiHistory.push({ role: 'model', parts: [{ text: 'Understood, I have context from our prior conversation.' }] });
-        geminiHistory.push(...toKeep);
-
-    } catch (e: any) {
-        console.error('[Compact] Summarization failed:', e.message);
-        geminiHistory.length = 0;
-        geminiHistory.push(...toKeep);
-    }
-}
-
-// Reset conversation (for /reset command)
 export function resetConversation(): void {
+    claudeHistory.length = 0;
     geminiHistory.length = 0;
     sessionTokenEstimate = 0;
     console.log('[Agent] Conversation history cleared.');
 }
 
 // ============================
-// MAIN HANDLER — SMART ROUTING
+// CONVERSATION COMPACTION
+// ============================
+function estimateHistoryChars(history: any[]): number {
+    let total = 0;
+    for (const msg of history) {
+        if (typeof msg.content === 'string') total += msg.content.length;
+        else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+                if (typeof part === 'string') total += part.length;
+                else if (part.text) total += part.text.length;
+            }
+        }
+    }
+    return total;
+}
+
+async function compactConversation(): Promise<void> {
+    const charCount = estimateHistoryChars(claudeHistory);
+    if (charCount < COMPACTION_CHAR_THRESHOLD) return;
+
+    console.log(`[Compact] History is ${Math.round(charCount / 1000)}K chars. Compacting...`);
+    const keepCount = Math.min(4, claudeHistory.length);
+    const toSummarize = claudeHistory.slice(0, -keepCount);
+    const toKeep = claudeHistory.slice(-keepCount);
+    if (toSummarize.length === 0) return;
+
+    let summaryInput = toSummarize.map(m => {
+        const content = typeof m.content === 'string' ? m.content :
+            Array.isArray(m.content) ? m.content.map((p: any) => p.text || '').join(' ') : '';
+        return `[${m.role}]: ${content.substring(0, 500)}`;
+    }).join('\n');
+
+    const summaryPrompt = `Summarize this conversation in 2-3 sentences. Focus on what was discussed, tools used, and outcomes:\n\n${summaryInput.substring(0, 5000)}`;
+
+    let summary = 'Previous conversation context.';
+    try {
+        if (isAnthropicAvailable() && config.anthropicApiKey) {
+            const r = await anthropic.messages.create({ model: config.claudeHeartbeatModel, max_tokens: 200, messages: [{ role: 'user', content: summaryPrompt }] });
+            summary = (r.content[0] as any)?.text || summary;
+        } else if (isGeminiAvailable()) {
+            const r = await gemini.models.generateContent({ model: config.geminiHeartbeatModel, contents: summaryPrompt });
+            summary = r.text || summary;
+        }
+    } catch { }
+
+    claudeHistory.length = 0;
+    claudeHistory.push({ role: 'user', content: `[Prior conversation summary]: ${summary}` });
+    claudeHistory.push({ role: 'assistant', content: 'Understood, I have context from our prior conversation.' });
+    claudeHistory.push(...toKeep);
+
+    geminiHistory.length = 0;
+    geminiHistory.push({ role: 'user', parts: [{ text: `[Prior conversation summary]: ${summary}` }] });
+    geminiHistory.push({ role: 'model', parts: [{ text: 'Understood.' }] });
+}
+
+// ============================
+// ATTACHMENT TYPES
 // ============================
 export interface MediaAttachment {
     type: 'image' | 'document';
@@ -284,57 +325,216 @@ export interface MediaAttachment {
     localPath: string;
 }
 
+// ============================
+// MAIN HANDLER — SMART ROUTING
+// ============================
 export async function handleUserMessage(text: string, attachments: MediaAttachment[] = []): Promise<string> {
     const imageAttachments = attachments.filter(a => a.type === 'image');
     const docAttachments = attachments.filter(a => a.type === 'document');
 
-    // Route 1: Vision → GPT-4o
+    // Vision → Claude first (it supports vision), then GPT-4o fallback
     if (imageAttachments.length > 0) {
-        console.log(`[Router] 🎨 Vision detected → ${MODEL_MAP.vision}`);
+        console.log('[Router] 🎨 Vision detected → Claude (with GPT-4o fallback)');
         return await handleVisionMessage(text, imageAttachments, docAttachments);
     }
 
-    // Build user message text
     let userText = text || '';
     if (docAttachments.length > 0) {
         const docList = docAttachments.map(d => `- ${d.filename} (saved at ${d.localPath})`).join('\n');
         userText += `\n\nThe user uploaded these files:\n${docList}\nUse your exec or filesystem tools to read/process them.`;
     }
 
-    // Classify the task
     const tier = await classifyTask(userText);
-    console.log(`[Router] Task classified as: ${tier.toUpperCase()} → ${MODEL_MAP[tier]}`);
+    const models = getModelMap();
+    console.log(`[Router] Task tier: ${tier.toUpperCase()}`);
 
-    // Route based on tier
-    if (tier === 'code') {
-        useHeavyCall();
-        return await handleCodeTask(userText);
-    } else if (tier === 'analysis') {
-        useHeavyCall();
-        return await handleGeminiTask(userText, MODEL_MAP.analysis);
-    } else {
-        return await handleGeminiTask(userText, MODEL_MAP.light);
-    }
+    if (tier === 'analysis' || tier === 'code') useHeavyCall();
+    return await routeWithFallback(userText, tier, false);
 }
 
 // ============================
-// GEMINI HANDLER (Flash + Pro)
+// PROVIDER FALLBACK CASCADE
+// ============================
+async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: boolean): Promise<string> {
+    const models = getModelMap();
+
+    // 1️⃣ Try Claude (Primary)
+    if (isAnthropicAvailable() && config.anthropicApiKey) {
+        const model = models.claude[tier];
+        console.log(`[Router] → Claude ${model}`);
+        try {
+            return await handleClaudeTask(text, model, alreadyPushed);
+        } catch (e: any) {
+            if (isRateLimitError(e)) {
+                tripBreaker('anthropic', e);
+                console.log('[Router] Claude rate-limited, falling back to OpenAI...');
+            } else {
+                console.error('[Router] Claude error:', e.message, '— falling back to OpenAI...');
+            }
+            alreadyPushed = true;
+        }
+    }
+
+    // 2️⃣ Try OpenAI (Fallback 1)
+    const openaiModel = models.openai[tier];
+    console.log(`[Router] → OpenAI ${openaiModel}`);
+    try {
+        return await handleOpenAITask(text, openaiModel, alreadyPushed);
+    } catch (e: any) {
+        console.error('[Router] OpenAI error:', e.message, '— falling back to Gemini...');
+        alreadyPushed = true;
+    }
+
+    // 3️⃣ Try Gemini (Fallback 2)
+    if (isGeminiAvailable() && config.geminiApiKey) {
+        const geminiModel = models.gemini[tier];
+        console.log(`[Router] → Gemini ${geminiModel}`);
+        try {
+            return await handleGeminiTask(text, geminiModel, alreadyPushed);
+        } catch (e: any) {
+            if (isRateLimitError(e)) tripBreaker('gemini', e);
+            return `Sorry, all providers are currently unavailable. Please try again in a moment. (${e.message})`;
+        }
+    }
+
+    return 'Sorry, no AI providers are currently available. Please try again later.';
+}
+
+// ============================
+// CLAUDE HANDLER (Primary)
+// ============================
+async function handleClaudeTask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+    await compactConversation();
+
+    if (!_alreadyPushed) {
+        claudeHistory.push({ role: 'user', content: userText });
+        geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
+    }
+
+    const tools = getAllToolsForAnthropic();
+    let iterations = 0;
+
+    // Build rolling messages array from history
+    const messages: Anthropic.MessageParam[] = [...claudeHistory];
+
+    while (iterations < MAX_ITERATIONS) {
+        iterations++;
+        console.log(`[Agent-Claude/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+
+        const response = await anthropic.messages.create({
+            model,
+            max_tokens: 8096,
+            system: buildSystemPrompt(),
+            tools,
+            messages
+        });
+
+        // Add assistant message to rolling context
+        messages.push({ role: 'assistant', content: response.content });
+
+        if (response.stop_reason === 'tool_use') {
+            // Execute all tool calls and collect results
+            const toolResults: Anthropic.ToolResultBlockParam[] = [];
+            for (const block of response.content) {
+                if (block.type !== 'tool_use') continue;
+                console.log(`[Agent-Claude] Tool: ${block.name}`);
+                try {
+                    const result = await routeToolExecution(block.name, block.input);
+                    toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: truncateResult(result) });
+                } catch (err: any) {
+                    toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true });
+                }
+            }
+            messages.push({ role: 'user', content: toolResults });
+            continue;
+        }
+
+        // Final text response
+        const reply = response.content
+            .filter(b => b.type === 'text')
+            .map(b => (b as any).text)
+            .join('\n')
+            .trim() || 'No response generated.';
+
+        // Commit to persistent history
+        claudeHistory.push({ role: 'assistant', content: reply });
+        geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
+        return reply;
+    }
+
+    return 'Error: Exceeded maximum tool iterations.';
+}
+
+// ============================
+// OPENAI HANDLER (Fallback 1)
+// ============================
+async function handleOpenAITask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+    if (!_alreadyPushed) {
+        claudeHistory.push({ role: 'user', content: userText });
+        geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
+    }
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: userText }
+    ];
+
+    let iterations = 0;
+    while (iterations < MAX_ITERATIONS) {
+        iterations++;
+        console.log(`[Agent-OpenAI/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+
+        const response = await openai.chat.completions.create({
+            model,
+            messages,
+            // @ts-ignore — tools accepted by all GPT-4 class models
+            tools: getAllToolsForOpenAI(),
+            tool_choice: 'auto'
+        });
+
+        const message = response.choices[0].message;
+        messages.push(message);
+
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            for (const tc of message.tool_calls) {
+                console.log(`[Agent-OpenAI] Tool: ${tc.function.name}`);
+                try {
+                    const result = await routeToolExecution(tc.function.name, JSON.parse(tc.function.arguments));
+                    messages.push({ role: 'tool', tool_call_id: tc.id, content: truncateResult(result) });
+                } catch (err: any) {
+                    messages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${err.message}` });
+                }
+            }
+            continue;
+        }
+
+        if (message.content) {
+            claudeHistory.push({ role: 'assistant', content: message.content });
+            geminiHistory.push({ role: 'model', parts: [{ text: message.content }] });
+            return message.content;
+        }
+
+        return 'Completed with no output.';
+    }
+
+    return 'Error: Exceeded maximum iterations.';
+}
+
+// ============================
+// GEMINI HANDLER (Fallback 2)
 // ============================
 async function handleGeminiTask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
-    await compactConversation();
     if (!_alreadyPushed) {
+        claudeHistory.push({ role: 'user', content: userText });
         geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
     }
 
     let iterations = 0;
     let pendingFunctionResponses: any[] = [];
-    const chat = ai.chats.create({
-        model: model,
+    const chat = gemini.chats.create({
+        model,
         config: {
-            systemInstruction: {
-                role: 'system',
-                parts: [{ text: buildSystemPrompt() }]
-            },
+            systemInstruction: { role: 'system', parts: [{ text: buildSystemPrompt() }] },
             tools: getAllToolsForGemini()
         },
         history: geminiHistory.slice(0, -1)
@@ -342,236 +542,163 @@ async function handleGeminiTask(userText: string, model: string, _alreadyPushed 
 
     while (iterations < MAX_ITERATIONS) {
         iterations++;
-        console.log(`[Agent-${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+        console.log(`[Agent-Gemini/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
 
-        try {
-            // First iteration: send the user's text
-            // Subsequent iterations: send accumulated function responses from prior tool calls
-            let response;
-            if (iterations === 1) {
-                response = await chat.sendMessage({ message: userText });
-            } else {
-                response = await chat.sendMessage({
-                    message: pendingFunctionResponses.map(pr => ({ functionResponse: pr }))
-                });
-            }
+        const response = iterations === 1
+            ? await chat.sendMessage({ message: userText })
+            : await chat.sendMessage({ message: pendingFunctionResponses.map(pr => ({ functionResponse: pr })) });
 
-            sessionTokenEstimate += Math.round((userText.length + (response.text?.length || 0)) / 4);
-
-            if (response.functionCalls && response.functionCalls.length > 0) {
-                pendingFunctionResponses = [];
-
-                for (const call of response.functionCalls) {
-                    console.log(`[Agent-${model}] Calling tool: ${call.name}`);
-                    try {
-                        const result = await routeToolExecution(call.name!, call.args);
-                        const output = truncateResult(result);
-                        pendingFunctionResponses.push({
-                            id: call.id,
-                            name: call.name!,
-                            response: { result: output }
-                        });
-                    } catch (error: any) {
-                        console.error(`[Agent-${model}] Tool error (${call.name}):`, error.message);
-                        pendingFunctionResponses.push({
-                            id: call.id,
-                            name: call.name!,
-                            response: { error: error.message }
-                        });
-                    }
+        if (response.functionCalls && response.functionCalls.length > 0) {
+            pendingFunctionResponses = [];
+            for (const call of response.functionCalls) {
+                console.log(`[Agent-Gemini] Tool: ${call.name}`);
+                try {
+                    const result = await routeToolExecution(call.name!, call.args);
+                    pendingFunctionResponses.push({ id: call.id, name: call.name!, response: { result: truncateResult(result) } });
+                } catch (err: any) {
+                    pendingFunctionResponses.push({ id: call.id, name: call.name!, response: { error: err.message } });
                 }
-                continue; // Loop back to send pendingFunctionResponses
-
-            } else {
-                const reply = response.text || 'No response generated.';
-                geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
-                console.log(`[Token] Session estimate: ~${sessionTokenEstimate} tokens`);
-                return reply;
             }
-
-        } catch (error: any) {
-            console.error(`[Agent-${model}] Error:`, error.message);
-
-            // If Pro fails, try Flash as fallback
-            if (model !== MODEL_MAP.light) {
-                console.log(`[Router] ${model} failed, falling back to Flash...`);
-                // Pass _alreadyPushed=true so the user message isn't duplicated
-                return await handleGeminiTask(userText, MODEL_MAP.light, true);
-            }
-
-            return `Sorry, I encountered an error: ${error.message}`;
+            continue;
         }
+
+        const reply = response.text || 'No response generated.';
+        claudeHistory.push({ role: 'assistant', content: reply });
+        geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
+        return reply;
     }
 
-    return "Error: Exceeded maximum tool iterations. The agent was safely halted.";
+    return 'Error: Exceeded maximum iterations.';
 }
 
 // ============================
-// OPENAI o4-mini HANDLER (Code)
-// ============================
-async function handleCodeTask(userText: string): Promise<string> {
-    console.log(`[Agent-o4-mini] Processing code task...`);
-
-    await compactConversation();
-    // Push to history now; if we fall back, pass _alreadyPushed=true
-    geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
-
-    try {
-        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-            { role: 'system', content: buildSystemPrompt() },
-            { role: 'user', content: userText }
-        ];
-
-        let iterations = 0;
-
-        while (iterations < MAX_ITERATIONS) {
-            iterations++;
-            console.log(`[Agent-o4-mini] Iteration ${iterations}/${MAX_ITERATIONS}...`);
-
-            const response = await openai.chat.completions.create({
-                model: 'o4-mini',
-                messages,
-                // @ts-ignore
-                tools: getAllToolsForOpenAI(),
-                tool_choice: 'auto'
-            });
-
-            const choice = response.choices[0];
-            const message = choice.message;
-            messages.push(message);
-
-            if (message.tool_calls && message.tool_calls.length > 0) {
-                for (const toolCall of message.tool_calls) {
-                    console.log(`[Agent-o4-mini] Calling tool: ${toolCall.function.name}`);
-                    try {
-                        const args = JSON.parse(toolCall.function.arguments);
-                        const result = await routeToolExecution(toolCall.function.name, args);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: truncateResult(result),
-                        });
-                    } catch (error: any) {
-                        console.error(`[Agent-o4-mini] Tool error (${toolCall.function.name}):`, error.message);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: `Error: ${error.message}`,
-                        });
-                    }
-                }
-                continue;
-            }
-
-            if (message.content) {
-                geminiHistory.push({ role: 'model', parts: [{ text: message.content }] });
-                console.log(`[Token] Session estimate: ~${sessionTokenEstimate} tokens`);
-                return message.content;
-            }
-
-            return 'Code task completed with no output.';
-        }
-
-        return "Error: Exceeded maximum iterations on code task.";
-
-    } catch (error: any) {
-        console.error('[Agent-o4-mini] Error:', error.message);
-
-        // Fallback: if o4-mini fails, try Gemini Pro (history already pushed)
-        console.log('[Router] o4-mini failed, falling back to Gemini Pro...');
-        return await handleGeminiTask(userText, MODEL_MAP.analysis, true);
-    }
-}
-
-// ============================
-// OPENAI VISION HANDLER (GPT-4o)
+// VISION HANDLER (Claude first, GPT-4o fallback)
 // ============================
 async function handleVisionMessage(text: string, images: MediaAttachment[], docs: MediaAttachment[]): Promise<string> {
-    console.log('[Agent-GPT4o] Processing vision task...');
-
-    const contentParts: any[] = [];
-
     let textContent = text || '';
     if (docs.length > 0) {
-        const docList = docs.map(d => `- ${d.filename} (saved at ${d.localPath})`).join('\n');
-        textContent += `\n\nThe user uploaded these files:\n${docList}\nUse your exec or filesystem tools to read/process them.`;
-    }
-    if (textContent) {
-        contentParts.push({ type: 'text', text: textContent });
-    }
-    for (const img of images) {
-        contentParts.push({
-            type: 'image_url',
-            image_url: { url: img.url, detail: 'auto' }
-        });
+        textContent += `\n\nThe user uploaded these files:\n${docs.map(d => `- ${d.filename} (saved at ${d.localPath})`).join('\n')}\nUse your exec or filesystem tools to read/process them.`;
     }
 
+    // Try Claude vision first
+    if (isAnthropicAvailable() && config.anthropicApiKey) {
+        try {
+            console.log('[Agent-Claude] Processing vision task...');
+            const imageBlocks: Anthropic.ImageBlockParam[] = await Promise.all(images.map(async img => {
+                const resp = await fetch(img.url);
+                const buffer = Buffer.from(await resp.arrayBuffer());
+                const b64 = buffer.toString('base64');
+                const mediaType = img.filename.match(/\.png$/i) ? 'image/png' :
+                    img.filename.match(/\.(jpg|jpeg)$/i) ? 'image/jpeg' :
+                    img.filename.match(/\.webp$/i) ? 'image/webp' : 'image/jpeg';
+                return { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } } as Anthropic.ImageBlockParam;
+            }));
+
+            const userContent: Anthropic.ContentBlockParam[] = [...imageBlocks];
+            if (textContent) userContent.push({ type: 'text', text: textContent });
+
+            const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }];
+            let iterations = 0;
+            let finalReply = '';
+
+            while (iterations < MAX_ITERATIONS) {
+                iterations++;
+                const response = await anthropic.messages.create({
+                    model: config.claudeLightModel,
+                    max_tokens: 4096,
+                    system: buildSystemPrompt(),
+                    tools: getAllToolsForAnthropic(),
+                    messages
+                });
+
+                messages.push({ role: 'assistant', content: response.content });
+
+                if (response.stop_reason === 'tool_use') {
+                    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+                    for (const block of response.content) {
+                        if (block.type !== 'tool_use') continue;
+                        try {
+                            const result = await routeToolExecution(block.name, block.input);
+                            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: truncateResult(result) });
+                        } catch (err: any) {
+                            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${err.message}`, is_error: true });
+                        }
+                    }
+                    messages.push({ role: 'user', content: toolResults });
+                    continue;
+                }
+
+                finalReply = response.content.filter(b => b.type === 'text').map(b => (b as any).text).join('\n').trim();
+                break;
+            }
+
+            if (finalReply) {
+                claudeHistory.push({ role: 'user', content: text || 'User sent an image.' });
+                claudeHistory.push({ role: 'assistant', content: finalReply });
+                geminiHistory.push({ role: 'user', parts: [{ text: text || 'User sent an image.' }] });
+                geminiHistory.push({ role: 'model', parts: [{ text: finalReply }] });
+                return finalReply;
+            }
+        } catch (e: any) {
+            if (isRateLimitError(e)) tripBreaker('anthropic', e);
+            console.error('[Agent-Claude] Vision error, falling back to GPT-4o:', e.message);
+        }
+    }
+
+    // Fallback: GPT-4o vision
     try {
+        console.log('[Agent-GPT4o] Vision fallback...');
+        const contentParts: any[] = [];
+        if (textContent) contentParts.push({ type: 'text', text: textContent });
+        for (const img of images) contentParts.push({ type: 'image_url', image_url: { url: img.url, detail: 'auto' } });
+
         const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
             { role: 'system', content: buildSystemPrompt() },
             { role: 'user', content: contentParts }
         ];
 
-        let iterations = 0;
-        let finalReply = '';
-
-        // Full agentic tool-call loop for vision
+        let iterations = 0, finalReply = '';
         while (iterations < MAX_ITERATIONS) {
             iterations++;
-            console.log(`[Agent-GPT4o] Vision iteration ${iterations}/${MAX_ITERATIONS}...`);
-
             const response = await openai.chat.completions.create({
-                model: MODEL_MAP.vision,
-                messages,
+                model: config.openaiAnalysisModel, messages,
                 // @ts-ignore
-                tools: getAllToolsForOpenAI(),
-                tool_choice: 'auto',
-                max_tokens: 2000
+                tools: getAllToolsForOpenAI(), tool_choice: 'auto', max_tokens: 2000
             });
-
             const message = response.choices[0]?.message;
             if (!message) break;
             messages.push(message);
-
-            if (message.tool_calls && message.tool_calls.length > 0) {
-                for (const toolCall of message.tool_calls) {
-                    console.log(`[Agent-GPT4o] Calling tool: ${toolCall.function.name}`);
+            if (message.tool_calls?.length) {
+                for (const tc of message.tool_calls) {
                     try {
-                        const args = JSON.parse(toolCall.function.arguments);
-                        const result = await routeToolExecution(toolCall.function.name, args);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: truncateResult(result),
-                        });
-                    } catch (error: any) {
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: `Error: ${error.message}`,
-                        });
+                        const result = await routeToolExecution(tc.function.name, JSON.parse(tc.function.arguments));
+                        messages.push({ role: 'tool', tool_call_id: tc.id, content: truncateResult(result) });
+                    } catch (err: any) {
+                        messages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${err.message}` });
                     }
                 }
                 continue;
             }
-
-            finalReply = message.content || 'I can see the image but generated no response.';
+            finalReply = message.content || '';
             break;
         }
 
-        if (!finalReply) finalReply = 'Vision task reached iteration limit without a final response.';
-
-        geminiHistory.push({ role: 'user', parts: [{ text: text || 'User sent an image.' }] });
-        geminiHistory.push({ role: 'model', parts: [{ text: finalReply }] });
-        return finalReply;
-
+        if (finalReply) {
+            claudeHistory.push({ role: 'user', content: text || 'User sent an image.' });
+            claudeHistory.push({ role: 'assistant', content: finalReply });
+            geminiHistory.push({ role: 'user', parts: [{ text: text || 'User sent an image.' }] });
+            geminiHistory.push({ role: 'model', parts: [{ text: finalReply }] });
+        }
+        return finalReply || 'Vision task completed with no output.';
     } catch (e: any) {
         return `Vision processing error: ${e.message}`;
     }
 }
 
-// Exported for heartbeat (always uses Flash)
+// ============================
+// HEARTBEAT (Claude Haiku → OpenAI mini → Gemini Flash)
+// ============================
 export async function handleHeartbeatTask(text: string): Promise<string> {
-    console.log('[Heartbeat] Using Gemini Flash for scheduled task...');
-    return await handleGeminiTask(text, MODEL_MAP.light);
+    console.log('[Heartbeat] Processing scheduled task...');
+    return await routeWithFallback(text, 'heartbeat', false);
 }

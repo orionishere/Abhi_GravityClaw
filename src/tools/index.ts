@@ -24,6 +24,10 @@ import {
     twitterGetMyStats, twitterGetMentions, twitterGetTrending,
     twitterSearchDeep, twitterDraftThread
 } from './twitter.js';
+import {
+    redditAnalyzeStyleSchema, redditGetStyleProfileSchema, redditBrowsePostsSchema,
+    redditAnalyzeStyle, redditGetStyleProfile, redditBrowsePosts
+} from './reddit.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -48,7 +52,10 @@ export const tools = [
     twitterGetMentionsSchema,
     twitterGetTrendingSchema,
     twitterSearchDeepSchema,
-    twitterDraftThreadSchema
+    twitterDraftThreadSchema,
+    redditAnalyzeStyleSchema,
+    redditGetStyleProfileSchema,
+    redditBrowsePostsSchema
 ];
 
 // Export an execution router
@@ -98,6 +105,12 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await twitterSearchDeep(args);
         case 'twitter_draft_thread':
             return await twitterDraftThread(args);
+        case 'reddit_analyze_style':
+            return await redditAnalyzeStyle(args);
+        case 'reddit_get_style_profile':
+            return await redditGetStyleProfile(args);
+        case 'reddit_browse_posts':
+            return await redditBrowsePosts(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

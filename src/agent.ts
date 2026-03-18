@@ -19,7 +19,16 @@ const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
 // ============================
 // CONSTANTS
 // ============================
-const MAX_ITERATIONS = 15;
+// Dynamic iteration limit — complex tasks get more room
+function getMaxIterations(tier: TaskTier): number {
+    switch (tier) {
+        case 'analysis': return 30;  // deep research, multi-step reasoning
+        case 'code':     return 30;  // multi-file projects, debugging cycles
+        case 'light':    return 15;  // general questions, lookups
+        case 'heartbeat':return 10;  // quick background tasks
+        default:         return 15;
+    }
+}
 const MAX_TOOL_RESULT_LENGTH = 4000;
 const COMPACTION_CHAR_THRESHOLD = 50000;
 
@@ -349,21 +358,22 @@ export async function handleUserMessage(text: string, attachments: MediaAttachme
     console.log(`[Router] Task tier: ${tier.toUpperCase()}`);
 
     if (tier === 'analysis' || tier === 'code') useHeavyCall();
-    return await routeWithFallback(userText, tier, false);
+    return await routeWithFallback(userText, tier, false, getMaxIterations(tier));
 }
 
 // ============================
 // PROVIDER FALLBACK CASCADE
 // ============================
-async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: boolean): Promise<string> {
+async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: boolean, maxIter: number = 0): Promise<string> {
     const models = getModelMap();
+    if (maxIter === 0) maxIter = getMaxIterations(tier);
 
     // 1️⃣ Try Claude (Primary)
     if (isAnthropicAvailable() && config.anthropicApiKey) {
         const model = models.claude[tier];
         console.log(`[Router] → Claude ${model}`);
         try {
-            return await handleClaudeTask(text, model, alreadyPushed);
+            return await handleClaudeTask(text, model, alreadyPushed, maxIter);
         } catch (e: any) {
             if (isRateLimitError(e)) {
                 tripBreaker('anthropic', e);
@@ -379,7 +389,7 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
     const openaiModel = models.openai[tier];
     console.log(`[Router] → OpenAI ${openaiModel}`);
     try {
-        return await handleOpenAITask(text, openaiModel, alreadyPushed);
+        return await handleOpenAITask(text, openaiModel, alreadyPushed, maxIter);
     } catch (e: any) {
         console.error('[Router] OpenAI error:', e.message, '— falling back to Gemini...');
         alreadyPushed = true;
@@ -390,7 +400,7 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
         const geminiModel = models.gemini[tier];
         console.log(`[Router] → Gemini ${geminiModel}`);
         try {
-            return await handleGeminiTask(text, geminiModel, alreadyPushed);
+            return await handleGeminiTask(text, geminiModel, alreadyPushed, maxIter);
         } catch (e: any) {
             if (isRateLimitError(e)) tripBreaker('gemini', e);
             return `Sorry, all providers are currently unavailable. Please try again in a moment. (${e.message})`;
@@ -403,7 +413,7 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
 // ============================
 // CLAUDE HANDLER (Primary)
 // ============================
-async function handleClaudeTask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+async function handleClaudeTask(userText: string, model: string, _alreadyPushed = false, maxIter = 15): Promise<string> {
     await compactConversation();
 
     if (!_alreadyPushed) {
@@ -417,9 +427,9 @@ async function handleClaudeTask(userText: string, model: string, _alreadyPushed 
     // Build rolling messages array from history
     const messages: Anthropic.MessageParam[] = [...claudeHistory];
 
-    while (iterations < MAX_ITERATIONS) {
+    while (iterations < maxIter) {
         iterations++;
-        console.log(`[Agent-Claude/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+        console.log(`[Agent-Claude/${model}] Iteration ${iterations}/${maxIter}...`);
 
         const response = await anthropic.messages.create({
             model,
@@ -468,7 +478,7 @@ async function handleClaudeTask(userText: string, model: string, _alreadyPushed 
 // ============================
 // OPENAI HANDLER (Fallback 1)
 // ============================
-async function handleOpenAITask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+async function handleOpenAITask(userText: string, model: string, _alreadyPushed = false, maxIter = 15): Promise<string> {
     if (!_alreadyPushed) {
         claudeHistory.push({ role: 'user', content: userText });
         geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
@@ -480,9 +490,9 @@ async function handleOpenAITask(userText: string, model: string, _alreadyPushed 
     ];
 
     let iterations = 0;
-    while (iterations < MAX_ITERATIONS) {
+    while (iterations < maxIter) {
         iterations++;
-        console.log(`[Agent-OpenAI/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+        console.log(`[Agent-OpenAI/${model}] Iteration ${iterations}/${maxIter}...`);
 
         const response = await openai.chat.completions.create({
             model,
@@ -523,7 +533,7 @@ async function handleOpenAITask(userText: string, model: string, _alreadyPushed 
 // ============================
 // GEMINI HANDLER (Fallback 2)
 // ============================
-async function handleGeminiTask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+async function handleGeminiTask(userText: string, model: string, _alreadyPushed = false, maxIter = 15): Promise<string> {
     if (!_alreadyPushed) {
         claudeHistory.push({ role: 'user', content: userText });
         geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
@@ -540,9 +550,9 @@ async function handleGeminiTask(userText: string, model: string, _alreadyPushed 
         history: geminiHistory.slice(0, -1)
     });
 
-    while (iterations < MAX_ITERATIONS) {
+    while (iterations < maxIter) {
         iterations++;
-        console.log(`[Agent-Gemini/${model}] Iteration ${iterations}/${MAX_ITERATIONS}...`);
+        console.log(`[Agent-Gemini/${model}] Iteration ${iterations}/${maxIter}...`);
 
         const response = iterations === 1
             ? await chat.sendMessage({ message: userText })
@@ -575,6 +585,8 @@ async function handleGeminiTask(userText: string, model: string, _alreadyPushed 
 // VISION HANDLER (Claude first, GPT-4o fallback)
 // ============================
 async function handleVisionMessage(text: string, images: MediaAttachment[], docs: MediaAttachment[]): Promise<string> {
+    const maxIter = getMaxIterations('analysis'); // Give vision tasks higher iteration limits
+
     let textContent = text || '';
     if (docs.length > 0) {
         textContent += `\n\nThe user uploaded these files:\n${docs.map(d => `- ${d.filename} (saved at ${d.localPath})`).join('\n')}\nUse your exec or filesystem tools to read/process them.`;
@@ -601,7 +613,7 @@ async function handleVisionMessage(text: string, images: MediaAttachment[], docs
             let iterations = 0;
             let finalReply = '';
 
-            while (iterations < MAX_ITERATIONS) {
+            while (iterations < maxIter) {
                 iterations++;
                 const response = await anthropic.messages.create({
                     model: config.claudeLightModel,
@@ -658,7 +670,7 @@ async function handleVisionMessage(text: string, images: MediaAttachment[], docs
         ];
 
         let iterations = 0, finalReply = '';
-        while (iterations < MAX_ITERATIONS) {
+        while (iterations < maxIter) {
             iterations++;
             const response = await openai.chat.completions.create({
                 model: config.openaiAnalysisModel, messages,

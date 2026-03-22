@@ -114,13 +114,31 @@ export const browserTypeSchema = {
 
 export async function browserNavigate(args: any): Promise<string> {
     try {
+        const url = String(args.url || '');
+
+        // Validate URL — block internal network access and dangerous schemes
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            return `Browser navigation blocked: only http:// and https:// URLs are allowed. Got: "${url.substring(0, 50)}"`;
+        }
+
+        // Block internal/local network access (SSRF prevention)
+        const blocked = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '169.254.', '10.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.', '192.168.'];
+        try {
+            const parsed = new URL(url);
+            const hostname = parsed.hostname.toLowerCase();
+            if (blocked.some(b => hostname.startsWith(b) || hostname === b)) {
+                return `Browser navigation blocked: cannot access internal/local network addresses.`;
+            }
+        } catch {
+            return `Browser navigation failed: invalid URL "${url.substring(0, 100)}"`;
+        }
+
         const p = await ensureBrowser();
-        await p.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
         const title = await p.title();
-        // Return a truncated version of the text to fit in context
         const text = await p.innerText('body').catch(() => '');
         const truncated = text.substring(0, 3000);
-        return `Navigated to: ${args.url}\nTitle: ${title}\n\nPage content:\n${truncated}`;
+        return `Navigated to: ${url}\nTitle: ${title}\n\nPage content:\n${truncated}`;
     } catch (e: any) {
         return `Browser navigation failed: ${e.message}`;
     }
@@ -138,10 +156,24 @@ export async function browserGetText(): Promise<string> {
 
 export async function browserScreenshot(args: any): Promise<string> {
     try {
+        // Validate path stays within sandbox (prevent path traversal)
+        const requestedPath = String(args.path || 'screenshot.png');
+        const resolvedPath = path.resolve(config.sandboxPath, requestedPath);
+        const sandboxResolved = path.resolve(config.sandboxPath);
+
+        if (!resolvedPath.startsWith(sandboxResolved + path.sep) && resolvedPath !== sandboxResolved) {
+            return `Screenshot failed: path "${requestedPath}" escapes the sandbox directory. Use a simple filename like "screenshot.png".`;
+        }
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(resolvedPath);
+        if (!parentDir.startsWith(sandboxResolved)) {
+            return `Screenshot failed: invalid path.`;
+        }
+
         const p = await ensureBrowser();
-        const savePath = `${config.sandboxPath}/${args.path}`;
-        await p.screenshot({ path: savePath, fullPage: false });
-        return `Screenshot saved to /sandbox/${args.path}`;
+        await p.screenshot({ path: resolvedPath, fullPage: false });
+        return `Screenshot saved to /sandbox/${requestedPath}`;
     } catch (e: any) {
         return `Screenshot failed: ${e.message}`;
     }

@@ -3,6 +3,9 @@ import { initDb } from './db.js';
 import { initMCPs } from './mcp.js';
 import { initHeartbeat } from './heartbeat.js';
 import { initModelSelector } from './modelSelector.js';
+import { initTracker } from './tracker.js';
+import { initHistory } from './history.js';
+import { initCosts } from './costs.js';
 
 async function main() {
     console.log('Booting Gravity Claw...');
@@ -15,6 +18,9 @@ async function main() {
 
     // Initialize internal dependencies
     initDb();
+    initTracker();
+    initHistory();
+    initCosts();
 
     // Auto-select best available models from each provider (cached 15 days)
     await initModelSelector();

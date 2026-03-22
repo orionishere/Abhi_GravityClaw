@@ -63,7 +63,8 @@ async function getImapConnection() {
             port: 993,
             tls: true,
             authTimeout: 10000,
-            tlsOptions: { rejectUnauthorized: false }
+            // TLS certificate validation is ON (secure default)
+            // Only disable for debugging with: tlsOptions: { rejectUnauthorized: false }
         }
     };
 

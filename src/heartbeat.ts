@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { handleHeartbeatTask } from './agent.js';
 import { loadDynamicCrons } from './tools/cron.js';
 import { runObservation, cleanupOldObservations } from './observe.js';
+import { saveTrackingReport, getSkillRecommendations } from './tracker.js';
+import { saveCostReport, getSpendByPeriod, getOllamaSavings } from './costs.js';
 
 export function initHeartbeat() {
     console.log('[Heartbeat] Proactive scheduling initialized.');
@@ -36,6 +38,44 @@ export function initHeartbeat() {
     cron.schedule('0 3 * * *', () => {
         try { cleanupOldObservations(); }
         catch (error) { console.error('[Heartbeat] Cleanup failed:', error); }
+    });
+
+    // Weekly Execution + Cost Report: Sunday at 10:00 AM
+    cron.schedule('0 10 * * 0', async () => {
+        try {
+            console.log('[Heartbeat] Generating weekly reports...');
+            saveTrackingReport();
+            saveCostReport();
+
+            const user = await bot.users.fetch(config.discordUserId);
+
+            // Cost summary
+            const weekSpend = getSpendByPeriod(7);
+            const monthSpend = getSpendByPeriod(30);
+            const savings = getOllamaSavings(7);
+
+            let msg = `📊 **Weekly Agent Report**\n\n`;
+            msg += `**Costs (last 7 days):** ~$${weekSpend.totalUsd.toFixed(2)} across ${weekSpend.callCount} API calls\n`;
+            msg += `**Costs (last 30 days):** ~$${monthSpend.totalUsd.toFixed(2)}\n`;
+            if (savings.localCalls > 0) {
+                msg += `**Ollama savings:** ${savings.localCalls} free calls saved ~$${savings.estimatedSavedUsd.toFixed(2)}\n`;
+            }
+
+            // Skill recommendations
+            const recommendations = getSkillRecommendations();
+            if (recommendations.length > 0) {
+                msg += `\n**Skill optimization suggestions:**\n`;
+                for (const r of recommendations.slice(0, 5)) {
+                    const direction = r.recommended_tier === 'local' ? '⬇️ move to local (save tokens)' : '⬆️ move to paid (better results)';
+                    msg += `• **${r.skill_name}**: ${r.current_tier} → ${r.recommended_tier} — ${direction}\n`;
+                }
+            }
+
+            msg += `\nFull reports saved to your Obsidian vault under \`reports/\`.`;
+            await user.send(msg);
+        } catch (error) {
+            console.error('[Heartbeat] Weekly report failed:', error);
+        }
     });
 
     // Initial observation on boot (10s delay)

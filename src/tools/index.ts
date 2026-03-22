@@ -1,6 +1,7 @@
 import { getCurrentTimeTool, executeGetCurrentTime } from './getCurrentTime.js';
 import { saveMemoryTool, executeSaveMemory } from './saveMemory.js';
 import { searchMemoriesTool, executeSearchMemories } from './searchMemories.js';
+import { searchHistorySchema, executeSearchHistory } from './searchHistory.js';
 import { execSchema, exec as execTool } from './exec.js';
 import {
     browserNavigateSchema, browserGetTextSchema, browserScreenshotSchema,
@@ -24,16 +25,13 @@ import {
     twitterGetMyStats, twitterGetMentions, twitterGetTrending,
     twitterSearchDeep, twitterDraftThread
 } from './twitter.js';
-import {
-    redditAnalyzeStyleSchema, redditGetStyleProfileSchema, redditBrowsePostsSchema,
-    redditAnalyzeStyle, redditGetStyleProfile, redditBrowsePosts
-} from './reddit.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
     getCurrentTimeTool,
     saveMemoryTool,
     searchMemoriesTool,
+    searchHistorySchema,
     browserNavigateSchema,
     browserGetTextSchema,
     browserScreenshotSchema,
@@ -52,10 +50,7 @@ export const tools = [
     twitterGetMentionsSchema,
     twitterGetTrendingSchema,
     twitterSearchDeepSchema,
-    twitterDraftThreadSchema,
-    redditAnalyzeStyleSchema,
-    redditGetStyleProfileSchema,
-    redditBrowsePostsSchema
+    twitterDraftThreadSchema
 ];
 
 // Export an execution router
@@ -67,6 +62,8 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await executeSaveMemory(args);
         case 'search_memories':
             return await executeSearchMemories(args);
+        case 'search_history':
+            return await executeSearchHistory(args);
         case 'browser_navigate':
             return await browserNavigate(args);
         case 'browser_get_text':
@@ -105,12 +102,6 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await twitterSearchDeep(args);
         case 'twitter_draft_thread':
             return await twitterDraftThread(args);
-        case 'reddit_analyze_style':
-            return await redditAnalyzeStyle(args);
-        case 'reddit_get_style_profile':
-            return await redditGetStyleProfile(args);
-        case 'reddit_browse_posts':
-            return await redditBrowsePosts(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

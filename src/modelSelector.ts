@@ -94,7 +94,9 @@ function loadCache(): ModelCache | null {
             const raw = fs.readFileSync(CACHE_FILE, 'utf8');
             return JSON.parse(raw) as ModelCache;
         }
-    } catch { }
+    } catch (e: any) {
+        console.error('[ModelSelector] Failed to load model cache:', (e as Error).message);
+    }
     return null;
 }
 

@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { db } from './db.js';
 import { handleHeartbeatTask } from './agent.js';
+import { logError } from './errors.js';
 import fs from 'fs';
 import path from 'path';
 

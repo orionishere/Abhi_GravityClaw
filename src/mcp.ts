@@ -5,16 +5,48 @@ import fs from "fs";
 import path from "path";
 import { config as appConfig } from "./config.js";
 
+// Allowed host paths for Docker volume mounts (security: prevent mounting arbitrary host dirs)
+const ALLOWED_VOLUME_PREFIXES: string[] = [];
+function getAllowedVolumePrefixes(): string[] {
+    if (ALLOWED_VOLUME_PREFIXES.length === 0) {
+        ALLOWED_VOLUME_PREFIXES.push(
+            path.resolve(appConfig.sandboxPath),
+            path.resolve(appConfig.obsidianPath || '/nonexistent'),
+            path.resolve(appConfig.dataPath),
+        );
+    }
+    return ALLOWED_VOLUME_PREFIXES;
+}
+
+function isVolumeAllowed(volumeMount: string): boolean {
+    // Volume format: "/host/path:/container/path" or "/host/path:/container/path:ro"
+    const hostPath = volumeMount.split(':')[0];
+    if (!hostPath) return false;
+    const resolved = path.resolve(hostPath);
+    return getAllowedVolumePrefixes().some(prefix =>
+        resolved.startsWith(prefix + path.sep) || resolved === prefix
+    );
+}
+
 // Docker execution command wrapper
 function createDockerCommand(image: string, command: string, args: string[], env: Record<string, string> = {}, extraVolumes: string[] = []): { command: string, args: string[] } {
     const envArgs: string[] = [];
     for (const [key, value] of Object.entries(env)) {
+        // Validate env key names (alphanumeric + underscore only)
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            console.warn(`[MCP] Rejected suspicious env key: "${key}"`);
+            continue;
+        }
         envArgs.push("-e", `${key}=${value}`);
     }
 
     const volumeArgs: string[] = [];
     for (const vol of extraVolumes) {
-        volumeArgs.push("-v", vol);
+        if (isVolumeAllowed(vol)) {
+            volumeArgs.push("-v", vol);
+        } else {
+            console.warn(`[MCP] Rejected unauthorized volume mount: "${vol}"`);
+        }
     }
 
     return {

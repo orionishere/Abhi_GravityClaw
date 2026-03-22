@@ -2,7 +2,7 @@ import cron, { ScheduledTask } from 'node-cron';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
-import { handleUserMessage } from '../agent.js';
+import { handleCronTask } from '../agent.js';
 import { bot } from '../bot.js';
 
 // In-memory store of active cron tasks
@@ -86,7 +86,9 @@ function loadCronDefinitions(): CronDefinition[] {
         if (fs.existsSync(filePath)) {
             return JSON.parse(fs.readFileSync(filePath, 'utf8'));
         }
-    } catch { }
+    } catch (e: any) {
+        console.error('[Cron] Failed to load cron definitions:', (e as Error).message);
+    }
     return [];
 }
 
@@ -118,7 +120,7 @@ function startCronTask(def: CronDefinition): boolean {
     const task = cron.schedule(def.schedule, async () => {
         console.log(`[Cron] Executing scheduled task: "${def.name}"`);
         try {
-            const result = await handleUserMessage(def.task);
+            const result = await handleCronTask(def.task);
 
             // Send the result to the user via Discord DM
             const user = await bot.users.fetch(config.discordUserId);

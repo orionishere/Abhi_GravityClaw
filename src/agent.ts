@@ -144,9 +144,11 @@ async function classifyTask(text: string): Promise<TaskTier> {
 
     // Use cheapest available model to classify
     const classifyPrompt = `You are a task classifier. Respond with EXACTLY one word:
-- "analysis" if the task requires deep reasoning, strategic planning, research, or complex decision-making
+- "analysis" ONLY if the task requires multi-step research across multiple sources, building a detailed report, complex financial/strategic planning, or synthesizing conflicting information. This should be rare.
 - "code" if the task involves writing code, debugging, creating scripts, or programming
-- "light" if simple: greetings, questions, lookups, file reading, status checks, reminders
+- "light" for everything else: greetings, questions, web lookups, checking emails, browsing a website, fetching data, summarising a single source, status checks, reminders, scheduling, or any task completable in 1-3 steps
+
+When in doubt, choose "light". Only choose "analysis" if truly necessary.
 
 User message: "${text.substring(0, 500)}"
 Classification:`;

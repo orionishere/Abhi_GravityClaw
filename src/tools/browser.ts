@@ -1,13 +1,37 @@
 import { chromium, Browser, Page } from 'playwright';
 import { config } from '../config.js';
+import path from 'path';
 
 let browser: Browser | null = null;
 let page: Page | null = null;
 
 async function ensureBrowser(): Promise<Page> {
     if (!browser || !browser.isConnected()) {
-        browser = await chromium.launch({ headless: true });
-        page = await browser.newPage();
+        browser = await chromium.launch({
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--window-size=1920,1080',
+                '--start-maximized',
+            ],
+        });
+        const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            viewport: { width: 1920, height: 1080 },
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            extraHTTPHeaders: {
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+        });
+        // Remove webdriver flag that reveals automation
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
+        page = await context.newPage();
     }
     if (!page || page.isClosed()) {
         page = await browser.newPage();

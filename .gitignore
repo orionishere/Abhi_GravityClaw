@@ -32,3 +32,6 @@ tmp/
 *.mp3
 learnSkill.ts
 searchNpm.ts
+
+# Obsidian vault (personal data)
+GravityClaw/

@@ -24,7 +24,7 @@ const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
 // ============================
 // CONSTANTS
 // ============================
-const MAX_ITERATIONS = 15;
+const MAX_ITERATIONS = 25;
 const MAX_TOOL_RESULT_LENGTH = 4000;
 const COMPACTION_CHAR_THRESHOLD = 50000;
 

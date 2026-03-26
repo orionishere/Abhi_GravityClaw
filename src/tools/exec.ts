@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { config } from '../config.js';
 import fs from 'fs';
 import path from 'path';
@@ -29,6 +29,7 @@ export const execSchema = {
 // Docker volume for persisted pip packages
 const PIP_VOLUME = 'gravityclaw-pip';
 
+
 // Allowed characters in pip package names (PEP 508)
 const SAFE_PACKAGE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*([<>=!~]+[a-zA-Z0-9.*]+)?$/;
 
@@ -57,10 +58,33 @@ function getPersistedPackages(): string[] {
     return [];
 }
 
+// Host-side sentinel file to track which packages are already installed in the volume
+const SENTINEL_HOST_PATH = '/tmp/gravityclaw-pip-installed.txt';
+
+function getInstalledSentinel(): string {
+    try {
+        if (fs.existsSync(SENTINEL_HOST_PATH)) {
+            return fs.readFileSync(SENTINEL_HOST_PATH, 'utf8').trim();
+        }
+    } catch {}
+    return '';
+}
+
+function writeInstalledSentinel(packages: string[]): void {
+    try {
+        fs.writeFileSync(SENTINEL_HOST_PATH, packages.slice().sort().join('\n'), 'utf8');
+    } catch {}
+}
+
 // Stage 1: Install packages WITH network into persistent Docker volume
 // Uses execFileSync with argument array — no shell injection possible
 function installPackages(packages: string[]): void {
     if (packages.length === 0) return;
+
+    const currentKey = packages.slice().sort().join('\n');
+    if (getInstalledSentinel() === currentKey) {
+        return; // Already installed — skip
+    }
 
     console.log(`[Exec] Stage 1: Installing packages [${packages.join(', ')}] into persistent volume...`);
 
@@ -76,6 +100,7 @@ function installPackages(packages: string[]): void {
             encoding: 'utf8',
             stdio: 'pipe',
         });
+        writeInstalledSentinel(packages);
         console.log(`[Exec] Stage 1: Packages installed successfully.`);
     } catch (e: any) {
         console.error(`[Exec] Stage 1: Package install warning: ${e.stderr || e.message}`);

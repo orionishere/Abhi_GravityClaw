@@ -1,5 +1,10 @@
 import { TwitterApi } from 'twitter-api-v2';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { config } from '../config.js';
+
+const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+const openai = new OpenAI({ apiKey: config.openaiApiKey });
 
 // Lazily initialize client with OAuth 1.0a (user context — gives access to own account data)
 function getClient(): TwitterApi {
@@ -333,6 +338,23 @@ export async function twitterSearchDeep(args: any): Promise<string> {
     }
 }
 
+function formatThreadBlock(draft: string): string {
+    // Parse numbered lines (e.g. "1/ tweet text" or "1. tweet text") into individual tweets
+    const tweets = draft
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => /^\d+[/.)]/.test(l))
+        .map(l => l.replace(/^\d+[/.)]\s*/, '').trim());
+
+    if (tweets.length === 0) {
+        // Fallback: split by blank lines
+        const parts = draft.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+        return `[THREAD]\n${parts.join('\n---tweet---\n')}\n[/THREAD]`;
+    }
+
+    return `[THREAD]\n${tweets.join('\n---tweet---\n')}\n[/THREAD]`;
+}
+
 export async function twitterDraftThread(args: any): Promise<string> {
     const { topic, tweetCount = 5, tone = 'professional', researchFirst = true } = args;
     const maxTweets = Math.min(tweetCount, 10);
@@ -359,15 +381,38 @@ export async function twitterDraftThread(args: any): Promise<string> {
         opinionated: 'bold, takes a clear stance, invites debate, confident',
     };
 
-    return `## 📝 Thread Draft Request: "${topic}"
+    const draftPrompt = `You are a Twitter content strategist. Draft a ${maxTweets}-tweet thread about "${topic}".
 
-**Tone:** ${tone} — ${toneGuide[tone]}
-**Target length:** ${maxTweets} tweets
-${researchContext}
+Tone: ${tone} — ${toneGuide[tone]}
+Rules:
+- Each tweet must be under 280 characters
+- End each tweet (except the last) with a hook that pulls readers to the next one
+- Number each tweet: "1/", "2/", etc.
+- No hashtag spam — at most 1-2 relevant hashtags total across the thread
+- Output ONLY the tweets, one per line, numbered
+${researchContext}`;
 
----
-*The agent will now use the above research and your system prompt to draft a ${maxTweets}-tweet ${tone} thread about "${topic}". Each tweet will be under 280 characters and end with a hook to the next.*
+    try {
+        if (config.anthropicApiKey) {
+            const r = await anthropic.messages.create({
+                model: config.claudeHeartbeatModel,
+                max_tokens: 1024,
+                messages: [{ role: 'user', content: draftPrompt }]
+            });
+            const draft = (r.content[0] as any)?.text?.trim() || '';
+            if (draft) return formatThreadBlock(draft);
+        }
+    } catch { /* fall through to OpenAI */ }
 
-**Draft Thread:**
-`;
+    try {
+        const r = await openai.chat.completions.create({
+            model: config.openaiHeartbeatModel,
+            max_tokens: 1024,
+            messages: [{ role: 'user', content: draftPrompt }]
+        });
+        const draft = r.choices[0]?.message?.content?.trim() || '';
+        if (draft) return formatThreadBlock(draft);
+    } catch { /* fall through */ }
+
+    return `(Thread draft failed — research context:\n${researchContext})`;
 }

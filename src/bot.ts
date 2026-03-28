@@ -293,22 +293,45 @@ bot.on(Events.MessageCreate, async (message) => {
             }
         }
 
-        // Split long messages instead of truncating
-        const chunks = splitMessage(reply);
+        // Detect [THREAD]...[/THREAD] blocks — send each tweet as a separate message
+        const threadMatch = reply.match(/\[THREAD\]([\s\S]*?)\[\/THREAD\]/);
+        if (threadMatch) {
+            const tweets = threadMatch[1]
+                .split('---tweet---')
+                .map((t: string) => t.trim())
+                .filter(Boolean);
 
-        for (let i = 0; i < chunks.length; i++) {
-            const payload: any = { content: chunks[i] };
+            // Send any text before the thread block as the first reply (if present)
+            const before = reply.slice(0, reply.indexOf('[THREAD]')).trim();
+            if (before) await message.reply({ content: before });
 
-            // Attach audio to the first message only
-            if (i === 0 && audioAttachment) {
-                payload.files = [audioAttachment];
+            for (let i = 0; i < tweets.length; i++) {
+                const payload: any = { content: tweets[i] };
+                if (i === 0 && !before && audioAttachment) payload.files = [audioAttachment];
+                if (i === 0 && !before) {
+                    await message.reply(payload);
+                } else {
+                    await message.channel.send(payload);
+                }
             }
+        } else {
+            // Split long messages instead of truncating
+            const chunks = splitMessage(reply);
 
-            if (i === 0) {
-                await message.reply(payload);
-            } else {
-                // Subsequent chunks sent as follow-up messages (not replies)
-                await message.channel.send(payload);
+            for (let i = 0; i < chunks.length; i++) {
+                const payload: any = { content: chunks[i] };
+
+                // Attach audio to the first message only
+                if (i === 0 && audioAttachment) {
+                    payload.files = [audioAttachment];
+                }
+
+                if (i === 0) {
+                    await message.reply(payload);
+                } else {
+                    // Subsequent chunks sent as follow-up messages (not replies)
+                    await message.channel.send(payload);
+                }
             }
         }
 

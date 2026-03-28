@@ -26,6 +26,11 @@ export const gmailSearchSchema = {
                 maxResults: {
                     type: 'number',
                     description: 'Maximum number of email summaries to return (default: 10)'
+                },
+                order: {
+                    type: 'string',
+                    enum: ['newest', 'oldest'],
+                    description: 'Return the newest or oldest matching emails. Default: newest.'
                 }
             },
             additionalProperties: false
@@ -96,13 +101,14 @@ export async function gmailSearch(args: any): Promise<string> {
 
         const maxResults = args.maxResults || 10;
         const total = searchResults.length;
-        const recent = searchResults.slice(-maxResults);
+        const oldest = args.order === 'oldest';
+        const slice = oldest ? searchResults.slice(0, maxResults) : searchResults.slice(-maxResults).reverse();
 
         let output = `Found ${total} emails matching your search.\n\n`;
 
         if (total > 0) {
-            output += `Showing the ${recent.length} most recent:\n\n`;
-            for (const msg of recent.reverse()) {
+            output += `Showing the ${slice.length} ${oldest ? 'oldest' : 'most recent'}:\n\n`;
+            for (const msg of slice) {
                 const header = msg.parts.find((p: any) => p.which === 'HEADER.FIELDS (FROM SUBJECT DATE)');
                 if (header) {
                     const headerText = header.body;

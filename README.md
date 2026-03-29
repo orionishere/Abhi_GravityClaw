@@ -1,237 +1,265 @@
-# 🦀 Gravity Claw
+# Gravity Claw
 
-A self-learning personal AI agent that runs locally on your machine. Built with TypeScript, powered by OpenAI & Gemini, and controllable via Discord.
+A self-learning personal AI agent that runs 24/7 on your VPS. Built with TypeScript, powered by a multi-provider LLM routing engine (Anthropic Claude, OpenAI, Gemini, Ollama), and controllable via Discord.
 
-**Gravity Claw teaches itself new skills.** When it doesn't know how to do something, it researches the answer with its browser, writes a step-by-step guide for itself, and remembers it forever.
-
----
-
-## ✨ Features
-
-### 🧠 Self-Learning Skills Engine
-- Ask Gravity Claw to do anything — if it doesn't know how, it will **research it with its browser**, write a `SKILL.md` guide, and execute it immediately.
-- Skills are stored as plain Markdown files in your Obsidian vault. You can read, edit, or delete them anytime.
-- On every reboot, skills are automatically loaded into the agent's brain.
-
-### 🌐 Native Browser (Playwright)
-- Full headless Chrome running natively on your machine via Playwright.
-- Navigate, click, type, screenshot, and scrape any website.
-- No Docker overhead, no Chromium crashes.
-
-### 🐳 Sandboxed Code Execution
-- Run Python/bash scripts inside an isolated Docker container.
-- Only `/sandbox` is accessible. No network. 256MB RAM limit. 1 CPU core.
-- Process Excel files, CSVs, PDFs — anything Python can handle.
-
-### 📧 Gmail Integration (Native IMAP)
-- Search your inbox by sender, subject, or date.
-- Read full email content.
-- Uses your existing Gmail App Password — no OAuth setup required.
-
-### 📁 Obsidian Vault Integration
-- Your agent's personality lives in `SOUL.md` inside your Obsidian vault.
-- Edit `SOUL.md` to change how the agent behaves — no code changes needed.
-- Skills are organized in `skills/<name>/SKILL.md` directories.
-
-### 💾 Persistent Memory (SQLite + FTS5)
-- Save and search memories across conversations.
-- Full-text search powered by SQLite FTS5.
-
-### 🔒 Security-First Architecture
-- **All file operations** run inside Docker containers with restricted volume mounts.
-- **Code execution** is sandboxed with no network, memory limits, and CPU limits.
-- **No host terminal access** — the agent cannot run commands on your machine.
-- **Discord ID whitelist** — only your Discord account can interact with the agent.
-- **No API keys in code** — all secrets stored in `.env`, never committed to git.
+Gravity Claw teaches itself new skills, browses the web, runs a nightly research cycle, tracks costs, and manages itself — all from your Discord DMs.
 
 ---
 
-## 🏗️ Architecture
+## Features
+
+### Multi-Provider LLM Routing
+- **Primary:** Anthropic Claude (Opus, Sonnet, Haiku)
+- **Fallback 1:** OpenAI (GPT-4o, o4-mini, GPT-4o-mini)
+- **Fallback 2:** Google Gemini (Pro, Flash)
+- **Local/Free:** Ollama (Llama 3.1 8B)
+- Automatic provider selection with parallel health checks and 15-day caching
+- Four task tiers: `analysis` (Opus), `code` (Sonnet), `light` (Sonnet), `heartbeat` (Haiku/free)
+
+### Self-Learning Skills Engine
+- Ask Gravity Claw to do anything — if it doesn't know how, it **researches it with its browser**, writes a `SKILL.md` guide, and executes it immediately.
+- Skills are stored as Markdown files in your Obsidian vault. Readable, editable, deletable.
+- On every reboot, skills are loaded into the agent's system prompt.
+
+### Dream Cycle (Nightly Intelligence System)
+- **4-phase autonomous research loop** running at 10:30 PM daily: SCAN, REFLECT, RESEARCH, PROPOSE
+- Scans configurable sources (Reddit, HN, GitHub Trending, arXiv, Twitter/X) for findings relevant to your goals
+- Reflects on goal progress using memory, observations, and past proposals
+- Deep-researches the most relevant findings via browser
+- Generates prioritized, actionable proposals injected into the agent's system prompt
+- Followed by a **Nightly Review** at 11:00 PM: day scoring, tomorrow's priorities, durable lesson extraction
+- Append-only `meta-notes.md` and `tacit-knowledge.md` for self-improving research quality
+
+### Preconscious Observation System
+- Background observation task scans recent memories and vault changes
+- Generates urgency-flagged observations injected into the system prompt before every response
+- Auto-expires observations older than 7 days
+
+### Sub-Agent Delegation
+- The agent can delegate complex sub-tasks to a child agent with a 5-iteration cap
+- Synchronous execution — the parent waits for the result before continuing
+
+### Native Browser (Playwright)
+- Full headless Chromium running natively via Playwright
+- Navigate, click, type, screenshot, and scrape any website
+- Stealth configuration for sites that block headless browsers
+
+### Sandboxed Code Execution
+- Run Python/bash scripts inside an isolated Docker container
+- No network access, 256MB RAM limit, 1 CPU core
+- Process Excel, CSV, PDF — anything Python can handle
+
+### Gmail Integration (Native IMAP)
+- Search your inbox by sender, subject, or date
+- Read full email content
+- Uses Gmail App Password — no OAuth setup required
+
+### Twitter/X Integration
+- Fetch your stats, mentions, and trending topics
+- Deep search with multi-query support
+- Draft tweet threads with per-message Discord delivery via `[THREAD]` protocol
+
+### Cron Scheduling
+- Schedule recurring tasks via Discord that persist across restarts
+- Stored in your Obsidian vault as JSON
+
+### Cost Tracking & Usage Reports
+- Per-call token counting and cost estimation across all providers
+- Usage report tool accessible via Discord
+- Ollama savings tracking (free local calls vs. paid API equivalents)
+
+### Obsidian Vault Integration
+- Agent personality lives in `SOUL.md` — edit behavior without touching code
+- Skills, observations, dream logs, reviews, goals, and tacit knowledge all stored as Markdown
+- Full-text searchable via SQLite FTS5
+
+### Goal & Research Management (via Discord)
+- `manage_goals` — add, remove, update, list goal pillars scored nightly
+- `manage_research` — add/remove topics and sources, toggle the dream cycle on/off
+
+### Security
+- Discord ID whitelist — only your account can interact
+- Docker-sandboxed code execution with no network
+- Browser in headless mode with no host file access
+- All secrets in `.env`, never committed
+- 25-iteration agent loop safety limit (5 for Ollama)
+
+---
+
+## Architecture
 
 ```
 Discord (User)
-    │
-    ▼
-┌──────────┐     ┌──────────────┐     ┌─────────────────┐
-│  bot.ts  │────▶│   agent.ts   │────▶│  OpenAI / Gemini │
-│ Discord  │     │  Agent Loop  │     │    LLM APIs      │
-│ Gateway  │     │  (15 iter)   │     └─────────────────┘
-└──────────┘     └──────┬───────┘
-                        │
-              ┌─────────┼─────────┐
-              ▼         ▼         ▼
-        ┌──────────┐ ┌──────┐ ┌──────────┐
-        │ browser  │ │ exec │ │filesystem│
-        │Playwright│ │Docker│ │Docker MCP│
-        │ (native) │ │sandbox│ │(/sandbox)│
-        └──────────┘ └──────┘ └──────────┘
+    |
+    v
++---------+     +------------+     +---------------------------+
+| bot.ts  |---->| agent.ts   |---->| Anthropic / OpenAI /      |
+| Discord |     | Agent Loop |     | Gemini / Ollama           |
+| Gateway |     | (25 iter)  |     | (auto-routed by tier)     |
++---------+     +-----+------+     +---------------------------+
+                      |
+          +-----------+-----------+------ ... ------+
+          v           v           v                  v
+    +---------+ +----------+ +---------+    +---------------+
+    | browser | |   exec   | | twitter |    | dreamCycle.ts |
+    |Playwright| |  Docker  | |  X API  |    | 4-phase nightly|
+    | (native)| | sandbox  | |         |    | research loop  |
+    +---------+ +----------+ +---------+    +---------------+
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - **Node.js** 18+
-- **Docker** (for sandboxed execution and filesystem tools)
-- **Discord Bot** (create one at [Discord Developer Portal](https://discord.com/developers))
-- **OpenAI API Key** (primary LLM)
-- **Gemini API Key** (fallback LLM)
+- **Docker** (for sandboxed execution)
+- **Discord Bot** ([Discord Developer Portal](https://discord.com/developers))
+- **Anthropic API Key** (primary LLM — optional, falls back to OpenAI)
+- **OpenAI API Key** (fallback 1)
+- **Gemini API Key** (fallback 2)
 - **Gmail App Password** (optional, for email features)
+- **Twitter Bearer Token** (optional, for X features)
 
 ### Installation
 
 ```bash
-# Clone the repo
 git clone https://github.com/orionishere/Abhi_GravityClaw.git
 cd Abhi_GravityClaw
 
-# Install dependencies
 npm install
 
-# Install Playwright browser
 npx playwright install chromium
 
-# Pull the Docker sandbox image
 docker pull python:3.12-slim
 
-# Copy and fill in your environment variables
 cp .env.example .env
 # Edit .env with your API keys
 ```
 
 ### Configuration
 
-Create a `.env` file with the following:
+Create a `.env` file:
 
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_USER_ID=your_discord_user_id
+ANTHROPIC_API_KEY=your_anthropic_api_key
 OPENAI_API_KEY=your_openai_api_key
 GEMINI_API_KEY=your_gemini_api_key
+OBSIDIAN_PATH=/path/to/your/obsidian/vault
+DATA_PATH=./data
 GMAIL_USER=your_gmail@gmail.com
 GMAIL_APP_PASSWORD=your_gmail_app_password
+TWITTER_BEARER_TOKEN=your_twitter_bearer_token
 ```
-
-### Obsidian Vault Setup
-
-Create an Obsidian vault for Gravity Claw's brain:
-
-```bash
-mkdir -p /path/to/your/vault/skills
-```
-
-Update the `OBSIDIAN_ROOT` path in `src/agent.ts` and the volume mount in `src/mcp.ts` to point to your vault.
 
 ### Run
 
 ```bash
+# Development
 npm run dev
+
+# Production (PM2)
+pm2 start dist/index.js --name gravity-claw
 ```
 
 ---
 
-## 🧩 Skills System
+## Tools
 
-Skills are Markdown files that teach the agent how to do specific tasks. They live in your Obsidian vault at `skills/<name>/SKILL.md`.
-
-### Example Skill
-
-```markdown
----
-name: check-weather
-description: Check current weather for any city using wttr.in
----
-
-# Check Weather
-
-1. Call `browser_navigate({ url: "https://wttr.in/CITY?format=3" })`
-2. Read the response — it contains a one-line weather summary.
-3. Report the result to the user.
-```
-
-### How the Agent Learns
-
-1. You ask something the agent doesn't know how to do.
-2. It tells you: *"I don't know how yet. Let me research it..."*
-3. It browses the web to find a free, no-API-key method.
-4. It writes a `SKILL.md` file to your Obsidian vault.
-5. It follows its own guide immediately to answer you.
-6. On the next restart, the skill is permanently loaded.
-
----
-
-## 🛠️ Available Tools
-
-| Tool | Type | Description |
-|------|------|-------------|
-| `browser_navigate` | Native | Visit a URL, return page text |
-| `browser_get_text` | Native | Get current page text |
-| `browser_screenshot` | Native | Save a screenshot to `/sandbox` |
-| `browser_click` | Native | Click a CSS selector |
-| `browser_type` | Native | Type into a form field |
-| `exec` | Docker | Run bash/Python in sandbox |
-| `gmail_search` | Native | Search Gmail by sender/subject/date |
-| `gmail_read` | Native | Read an email by UID |
-| `save_memory` | Native | Save a note to memory |
-| `search_memories` | Native | Full-text search memories |
-| `get_current_time` | Native | Get current date/time |
-| `mcp__filesystem-mcp__*` | Docker MCP | 14 filesystem tools for `/sandbox` and `/obsidian` |
+| Tool | Description |
+|------|-------------|
+| `browser_navigate` | Visit a URL, return page text |
+| `browser_get_text` | Get current page text |
+| `browser_screenshot` | Screenshot to sandbox |
+| `browser_click` | Click a CSS selector |
+| `browser_type` | Type into a form field |
+| `exec` | Run bash/Python in Docker sandbox |
+| `gmail_search` | Search Gmail by sender/subject/date |
+| `gmail_read` | Read an email by UID |
+| `save_memory` | Save a note to persistent memory |
+| `search_memories` | Full-text search memories |
+| `search_history` | Search conversation history |
+| `get_current_time` | Get current date/time |
+| `delegate` | Delegate a sub-task to a child agent |
+| `github_create_and_push` | Create/push files to GitHub |
+| `schedule_cron` | Schedule a recurring task |
+| `cancel_cron` | Cancel a scheduled task |
+| `list_crons` | List all active cron jobs |
+| `learn_skill` | Research and learn a new skill |
+| `twitter_get_my_stats` | Fetch your X/Twitter stats |
+| `twitter_get_mentions` | Fetch recent mentions |
+| `twitter_get_trending` | Get trending topics |
+| `twitter_search_deep` | Deep search X/Twitter |
+| `twitter_draft_thread` | Draft a tweet thread |
+| `manage_goals` | Add/remove/update/list goal pillars |
+| `manage_research` | Manage dream cycle topics and sources |
+| `get_usage_report` | View cost and usage breakdown |
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-GravityClaw/
+Abhi_GravityClaw/
 ├── src/
-│   ├── index.ts          # Entry point
-│   ├── bot.ts            # Discord bot gateway
-│   ├── agent.ts          # Agent loop + dynamic prompt loader
-│   ├── mcp.ts            # MCP bridge (Docker tool servers)
-│   ├── config.ts         # Environment variable loader
-│   ├── db.ts             # SQLite + FTS5 memory
-│   ├── heartbeat.ts      # Proactive scheduling
-│   ├── voice.ts          # Voice features (optional)
+│   ├── index.ts            # Entry point — boot sequence
+│   ├── bot.ts              # Discord gateway + message splitting
+│   ├── agent.ts            # Agent loop, routing, system prompt
+│   ├── modelSelector.ts    # Multi-provider auto-selection
+│   ├── config.ts           # Environment variable loader
+│   ├── db.ts               # SQLite + FTS5 memory
+│   ├── heartbeat.ts        # Proactive scheduling + cron triggers
+│   ├── observe.ts          # Preconscious observation system
+│   ├── dreamCycle.ts       # 4-phase nightly intelligence loop
+│   ├── nightlyReview.ts    # Day scoring + tacit knowledge
+│   ├── history.ts          # Conversation history + compaction
+│   ├── costs.ts            # Token usage + cost tracking
+│   ├── tracker.ts          # Execution analytics + skill recommendations
+│   ├── mcp.ts              # MCP bridge (external tool servers)
+│   ├── ollama.ts           # Local LLM integration
+│   ├── voice.ts            # Voice features (optional)
+│   ├── fileUtils.ts        # Shared file helpers
+│   ├── utils.ts            # Pure utility functions
+│   ├── types/
+│   │   └── dream.ts        # Shared dream cycle types
 │   └── tools/
-│       ├── index.ts      # Tool registry + router
-│       ├── browser.ts    # Playwright browser tools
-│       ├── exec.ts       # Sandboxed Docker execution
-│       ├── gmail.ts      # Native IMAP Gmail tools
-│       ├── getCurrentTime.ts
-│       ├── saveMemory.ts
-│       └── searchMemories.ts
+│       ├── index.ts         # Tool registry + router
+│       ├── browser.ts       # Playwright browser tools
+│       ├── exec.ts          # Docker sandboxed execution
+│       ├── gmail.ts         # Native IMAP Gmail
+│       ├── twitter.ts       # X/Twitter API tools
+│       ├── cron.ts          # Persistent cron scheduling
+│       ├── delegate.ts      # Sub-agent delegation
+│       ├── github.ts        # GitHub push tools
+│       ├── learnSkill.ts    # Self-learning engine
+│       ├── manageGoals.ts   # Goal pillar management
+│       ├── manageResearch.ts # Dream cycle config management
+│       ├── report.ts        # Usage/cost reports
+│       ├── saveMemory.ts    # Memory persistence
+│       ├── searchMemories.ts # Memory search
+│       ├── searchHistory.ts  # History search
+│       └── getCurrentTime.ts
 ├── data/
-│   ├── skills.json       # MCP server definitions
-│   ├── memory.db         # SQLite memory database
-│   └── sandbox/          # Docker sandbox mount point
-├── .env                  # API keys (never committed)
-├── .env.example          # Template for .env
+│   ├── dream_config.json   # Dream cycle research config
+│   ├── memory.db           # SQLite database
+│   └── sandbox/            # Docker sandbox mount
+├── GravityClaw/            # Obsidian vault root
+│   ├── SOUL.md             # Agent personality
+│   ├── goals.md            # Goal pillars (scored nightly)
+│   └── skills/             # Learned skill guides
+├── .env                    # API keys (never committed)
 ├── package.json
 └── tsconfig.json
 ```
 
 ---
 
-## 🔒 Security Model
-
-Gravity Claw follows a **stricter security model than OpenClaw**:
-
-| Layer | Protection |
-|-------|-----------|
-| **Discord** | Only your Discord ID can interact with the bot |
-| **Filesystem** | Docker MCP with restricted volume mounts (`/sandbox`, `/obsidian` only) |
-| **Code Execution** | Docker container, no network, 256MB RAM, 1 CPU |
-| **Browser** | Headless mode, no access to host files |
-| **Secrets** | `.env` file only, never in code, never committed |
-| **Agent Loop** | 15-iteration safety limit prevents runaway loops |
-
----
-
-## 📄 License
+## License
 
 MIT
 
 ---
 
-*Vibe Coded with ❤️ by Abhijeet — inspired by [OpenClaw](https://github.com/openclaw/openclaw), secured by design.*
+*Built by Abhijeet — inspired by [OpenClaw](https://github.com/openclaw/openclaw), secured by design.*

@@ -26,7 +26,7 @@ export const bot = new Client({
  * Split a long message into chunks that fit Discord's 2000 char limit.
  * Splits at newlines when possible, never mid-word.
  */
-function splitMessage(text: string, maxLength = 1900): string[] {
+export function splitMessage(text: string, maxLength = 1900): string[] {
     if (text.length <= maxLength) return [text];
 
     const chunks: string[] = [];

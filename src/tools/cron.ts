@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
 import { handleCronTask } from '../agent.js';
-import { bot } from '../bot.js';
+import { bot, splitMessage } from '../bot.js';
 
 // In-memory store of active cron tasks
 const activeTasks: Map<string, ScheduledTask> = new Map();
@@ -125,8 +125,10 @@ function startCronTask(def: CronDefinition): boolean {
             // Send the result to the user via Discord DM
             const user = await bot.users.fetch(config.discordUserId);
             const header = `📅 **Scheduled Task: ${def.name}**\n`;
-            const message = header + (result.length > 1900 ? result.substring(0, 1900) + '...' : result);
-            await user.send(message);
+            const chunks = splitMessage(header + result);
+            for (const chunk of chunks) {
+                await user.send(chunk);
+            }
         } catch (e: any) {
             console.error(`[Cron] Error in task "${def.name}":`, e.message);
         }

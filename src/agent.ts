@@ -6,6 +6,7 @@ import { getModel } from './modelSelector.js';
 import { tools as internalTools, executeTool as executeInternalTool } from './tools/index.js';
 import { executeMCPTool, getMCPToolsSchema } from './mcp.js';
 import { getPreconsciousBuffer } from './observe.js';
+import { getDreamProposalsBuffer } from './dreamCycle.js';
 import { isOllamaAvailable, ollamaGenerate, ollamaChat } from './ollama.js';
 import { startTracking, trackToolCall, finishTracking, type ExecutionContext } from './tracker.js';
 import { persistMessage, buildCompactionPrompt, flushToMemory, saveSummary, getLatestSummary, newSession } from './history.js';
@@ -212,6 +213,8 @@ function buildSystemPrompt(): string {
     } catch (e: any) { logError('Agent', 'load skills directory', e); }
     const buffer = getPreconsciousBuffer();
     if (buffer) prompt += buffer;
+    const dreamBuffer = getDreamProposalsBuffer();
+    if (dreamBuffer) prompt += dreamBuffer;
     return prompt;
 }
 
@@ -973,6 +976,14 @@ function shouldUseLocalModel(taskText: string): { useLocal: boolean; allowedTool
 export async function handleHeartbeatTask(text: string): Promise<string> {
     console.log('[Heartbeat] Processing scheduled task...');
     return await routeWithFallback(text, 'heartbeat', false, 'heartbeat');
+}
+
+// ============================
+// DREAM TASK HANDLER — light tier (Sonnet) with full tool access
+// ============================
+export async function handleDreamTask(text: string): Promise<string> {
+    console.log('[Dream] Processing dream cycle task (light tier)...');
+    return await routeWithFallback(text, 'light', false, 'cron');
 }
 
 // ============================

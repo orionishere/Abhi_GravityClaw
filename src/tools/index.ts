@@ -26,6 +26,8 @@ import {
     twitterSearchDeep, twitterDraftThread
 } from './twitter.js';
 import { getUsageReportSchema, getUsageReport } from './report.js';
+import { manageGoalsSchema, executeManageGoals } from './manageGoals.js';
+import { manageResearchSchema, executeManageResearch } from './manageResearch.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -52,7 +54,9 @@ export const tools = [
     twitterGetTrendingSchema,
     twitterSearchDeepSchema,
     twitterDraftThreadSchema,
-    getUsageReportSchema
+    getUsageReportSchema,
+    manageGoalsSchema,
+    manageResearchSchema
 ];
 
 // Export an execution router
@@ -106,6 +110,10 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await twitterDraftThread(args);
         case 'get_usage_report':
             return await getUsageReport();
+        case 'manage_goals':
+            return await executeManageGoals(args);
+        case 'manage_research':
+            return await executeManageResearch(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

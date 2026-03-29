@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { handleHeartbeatTask } from './agent.js';
 import { loadDynamicCrons } from './tools/cron.js';
 import { runObservation, cleanupOldObservations } from './observe.js';
+import { runDreamCycle } from './dreamCycle.js';
+import { runNightlyReview } from './nightlyReview.js';
 import { saveTrackingReport, getSkillRecommendations } from './tracker.js';
 import { saveCostReport, getSpendByPeriod, getOllamaSavings } from './costs.js';
 
@@ -75,6 +77,26 @@ export function initHeartbeat() {
             await user.send(msg);
         } catch (error) {
             console.error('[Heartbeat] Weekly report failed:', error);
+        }
+    });
+
+    // Dream Cycle: 10:30 PM Pacific daily
+    cron.schedule('30 22 * * *', async () => {
+        try {
+            console.log('[Heartbeat] Triggering dream cycle...');
+            await runDreamCycle();
+        } catch (error) {
+            console.error('[Heartbeat] Dream cycle failed:', error);
+        }
+    });
+
+    // Nightly Review: 11:00 PM Pacific daily
+    cron.schedule('0 23 * * *', async () => {
+        try {
+            console.log('[Heartbeat] Triggering nightly review...');
+            await runNightlyReview();
+        } catch (error) {
+            console.error('[Heartbeat] Nightly review failed:', error);
         }
     });
 

@@ -2,58 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 import { db } from './db.js';
-import { bot } from './bot.js';
+import { bot, splitMessage } from './bot.js';
 import { handleHeartbeatTask, handleDreamTask } from './agent.js';
-
-// ============================
-// CONFIG TYPES & DEFAULTS
-// ============================
-
-interface DreamSource {
-    name: string;
-    url?: string;
-    type: 'browser' | 'twitter';
-    query?: string;
-}
-
-interface DreamConfig {
-    enabled: boolean;
-    topics: string[];
-    sources: DreamSource[];
-    goalsFile: string;
-    maxScanSources: number;
-    maxProposals: number;
-}
-
-const DEFAULT_CONFIG: DreamConfig = {
-    enabled: true,
-    topics: [
-        'AI agent architecture & design patterns',
-        'OpenClaw updates, plugins, community techniques',
-        'MCP protocol & new MCP servers',
-        'Robotics & hardware',
-        'Building in public & developer content creation',
-        'Cricket content creation, sports influencer monetization, YouTube and X growth',
-        'Roblox and solo game development',
-        'Indie game monetization and passive income',
-    ],
-    sources: [
-        { name: 'Hacker News', url: 'https://news.ycombinator.com', type: 'browser' },
-        { name: 'GitHub Trending TS', url: 'https://github.com/trending/typescript?since=daily', type: 'browser' },
-        { name: 'r/OpenClaw', url: 'https://old.reddit.com/r/openclaw/hot/', type: 'browser' },
-        { name: 'r/LocalLLaMA', url: 'https://old.reddit.com/r/LocalLLaMA/hot/', type: 'browser' },
-        { name: 'r/gamedev', url: 'https://old.reddit.com/r/gamedev/hot/', type: 'browser' },
-        { name: 'r/robloxgamedev', url: 'https://old.reddit.com/r/robloxgamedev/hot/', type: 'browser' },
-        { name: 'r/NewTubers', url: 'https://old.reddit.com/r/NewTubers/hot/', type: 'browser' },
-        { name: 'r/Cricket', url: 'https://old.reddit.com/r/Cricket/hot/', type: 'browser' },
-        { name: 'Anthropic Blog', url: 'https://www.anthropic.com/news', type: 'browser' },
-        { name: 'arXiv AI', url: 'https://arxiv.org/list/cs.AI/recent', type: 'browser' },
-        { name: 'Cricket Twitter/X', type: 'twitter', query: 'cricket trending OR cricket viral OR cricket strategy OR cricket content creator' },
-    ],
-    goalsFile: 'goals.md',
-    maxScanSources: 6,
-    maxProposals: 5,
-};
+import { today, ensureDir, readFileIfExists } from './fileUtils.js';
+import type { DreamConfig } from './types/dream.js';
+import { DEFAULT_DREAM_CONFIG } from './types/dream.js';
 
 // Reload fresh every cycle — never cache
 function loadDreamConfig(): DreamConfig {
@@ -65,37 +18,15 @@ function loadDreamConfig(): DreamConfig {
     } catch (e: any) {
         console.warn('[Dream] Failed to load dream_config.json, using defaults:', e.message);
     }
-    return DEFAULT_CONFIG;
+    return DEFAULT_DREAM_CONFIG;
 }
 
 // ============================
 // HELPERS
 // ============================
 
-function today(): string {
-    return new Date().toISOString().split('T')[0];
-}
-
-function ensureDir(dirPath: string): void {
-    if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-    }
-}
-
 function getDreamCycleDir(): string {
     return path.join(config.obsidianPath, 'dream-cycle');
-}
-
-function readFileIfExists(filePath: string, maxLength = 5000): string {
-    try {
-        if (fs.existsSync(filePath)) {
-            const content = fs.readFileSync(filePath, 'utf8');
-            return content.length > maxLength ? content.substring(0, maxLength) + '\n...[truncated]' : content;
-        }
-    } catch (e: any) {
-        console.warn(`[Dream] Could not read ${filePath}: ${e.message}`);
-    }
-    return '';
 }
 
 function getMostRecentFileInDir(dirPath: string): string {
@@ -476,10 +407,11 @@ export async function runDreamCycle(): Promise<void> {
         } else {
             msg += '(No proposals generated tonight)';
         }
-        if (msg.length > 1900) msg = msg.substring(0, 1900) + '...';
-
         const user = await bot.users.fetch(config.discordUserId);
-        await user.send(msg);
+        const chunks = splitMessage(msg);
+        for (const chunk of chunks) {
+            await user.send(chunk);
+        }
     } catch (e: any) {
         console.error('[Dream] Failed to send Discord DM:', e.message);
     }

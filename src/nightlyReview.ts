@@ -4,32 +4,7 @@ import { config } from './config.js';
 import { db } from './db.js';
 import { bot } from './bot.js';
 import { handleHeartbeatTask } from './agent.js';
-
-// ============================
-// HELPERS
-// ============================
-
-function today(): string {
-    return new Date().toISOString().split('T')[0];
-}
-
-function ensureDir(dirPath: string): void {
-    if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-    }
-}
-
-function readFileIfExists(filePath: string, maxLength = 5000): string {
-    try {
-        if (fs.existsSync(filePath)) {
-            const content = fs.readFileSync(filePath, 'utf8');
-            return content.length > maxLength ? content.substring(0, maxLength) + '\n...[truncated]' : content;
-        }
-    } catch (e: any) {
-        console.warn(`[Review] Could not read ${filePath}: ${e.message}`);
-    }
-    return '';
-}
+import { today, ensureDir, readFileIfExists } from './fileUtils.js';
 
 function getTodayConversations(): string {
     try {
@@ -163,8 +138,9 @@ Format:
         const priorityMatch = reviewOutput.match(/\*\*#1 Priority:\*\* (.+)/);
         const tomorrowPriority = priorityMatch ? priorityMatch[1].trim() : '(see review)';
 
-        const lessonMatch = reviewOutput.match(/- (.+?): .+/);
-        const topLesson = lessonMatch ? lessonMatch[0].trim() : '(see review)';
+        const lessonsSection = reviewOutput.match(/### Lessons Learned\n([\s\S]*?)(?:\n###|$)/);
+        const firstLesson = lessonsSection ? lessonsSection[1].match(/- (.+)/) : null;
+        const topLesson = firstLesson ? firstLesson[0].trim() : '(see review)';
 
         let msg = `🌃 **Nightly Review — ${today()}**\nDay: **${avgScore}/5**\nTomorrow: ${tomorrowPriority}\nLesson: ${topLesson}`;
         if (msg.length > 500) msg = msg.substring(0, 497) + '...';

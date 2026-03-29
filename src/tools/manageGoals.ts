@@ -15,7 +15,8 @@ export const manageGoalsSchema = {
             properties: {
                 action: {
                     type: 'string',
-                    description: 'One of: "list", "add", "remove", "update"'
+                    enum: ['list', 'add', 'remove', 'update'],
+                    description: 'The action to perform on the goals file.'
                 },
                 pillar_name: {
                     type: 'string',

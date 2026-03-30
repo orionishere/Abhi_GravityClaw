@@ -262,4 +262,4 @@ MIT
 
 ---
 
-*Built by Abhijeet — inspired by [OpenClaw](https://github.com/openclaw/openclaw), secured by design.*
+*Vibe Coded by Abhijeet — inspired by [OpenClaw](https://github.com/openclaw/openclaw), secured by design.*

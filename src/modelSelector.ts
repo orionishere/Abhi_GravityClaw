@@ -186,7 +186,7 @@ async function fetchOpenAIModels(): Promise<Record<ModelTier, string>> {
 
     return {
         analysis:  flagship[0]  || reasoning[0] || FALLBACKS.openai.analysis,
-        code:      reasoning[0] || flagship[0]  || FALLBACKS.openai.code,
+        code:      flagship[0]  || reasoning[0] || FALLBACKS.openai.code,
         light:     flagship[0]  || minis[0]     || FALLBACKS.openai.light,
         heartbeat: minis[0]     || flagship[0]  || FALLBACKS.openai.heartbeat,
     };

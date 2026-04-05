@@ -437,7 +437,26 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
     // For 'local' tier that failed Ollama, downgrade to heartbeat for paid fallback
     const effectiveTier = tier === 'local' ? 'heartbeat' : tier;
 
-    // 1️⃣ Try Claude (Primary)
+    // 1️⃣ Try OpenAI (Primary)
+    const openaiModel = models.openai[effectiveTier];
+    {
+        const ctx = startTracking({ taskText: text, taskSource, tier: effectiveTier, provider: 'openai', model: openaiModel, skillName });
+        _activeTracker = ctx;
+        console.log(`[Router] → OpenAI ${openaiModel}`);
+        try {
+            const result = await handleOpenAITask(text, openaiModel, alreadyPushed);
+            finishTracking(ctx, true);
+            _activeTracker = null;
+            return result;
+        } catch (e: any) {
+            finishTracking(ctx, false, e.message);
+            _activeTracker = null;
+            console.error('[Router] OpenAI error:', e.message, '— falling back to Claude...');
+            alreadyPushed = true;
+        }
+    }
+
+    // 2️⃣ Try Claude (Fallback 1)
     if (isAnthropicAvailable() && config.anthropicApiKey) {
         const model = models.claude[effectiveTier];
         const ctx = startTracking({ taskText: text, taskSource, tier: effectiveTier, provider: 'anthropic', model, skillName });
@@ -453,29 +472,10 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
             _activeTracker = null;
             if (isRateLimitError(e)) {
                 tripBreaker('anthropic', e);
-                console.log('[Router] Claude rate-limited, falling back to OpenAI...');
+                console.log('[Router] Claude rate-limited, falling back to Gemini...');
             } else {
-                console.error('[Router] Claude error:', e.message, '— falling back to OpenAI...');
+                console.error('[Router] Claude error:', e.message, '— falling back to Gemini...');
             }
-            alreadyPushed = true;
-        }
-    }
-
-    // 2️⃣ Try OpenAI (Fallback 1)
-    const openaiModel = models.openai[effectiveTier];
-    {
-        const ctx = startTracking({ taskText: text, taskSource, tier: effectiveTier, provider: 'openai', model: openaiModel, skillName });
-        _activeTracker = ctx;
-        console.log(`[Router] → OpenAI ${openaiModel}`);
-        try {
-            const result = await handleOpenAITask(text, openaiModel, alreadyPushed);
-            finishTracking(ctx, true);
-            _activeTracker = null;
-            return result;
-        } catch (e: any) {
-            finishTracking(ctx, false, e.message);
-            _activeTracker = null;
-            console.error('[Router] OpenAI error:', e.message, '— falling back to Gemini...');
             alreadyPushed = true;
         }
     }
@@ -495,11 +495,28 @@ async function routeWithFallback(text: string, tier: TaskTier, alreadyPushed: bo
             finishTracking(ctx, false, e.message);
             _activeTracker = null;
             if (isRateLimitError(e)) tripBreaker('gemini', e);
-            return `Sorry, all providers are currently unavailable. Please try again in a moment. (${e.message})`;
+            console.error('[Router] Gemini error:', e.message, '— falling back to Ollama (emergency local)...');
         }
     }
 
-    return 'Sorry, no AI providers are currently available. Please try again later.';
+    // 4️⃣ Emergency Ollama fallback (keeps agent alive when ALL cloud providers fail)
+    if (await isOllamaAvailable()) {
+        const ctx = startTracking({ taskText: text, taskSource, tier: effectiveTier, provider: 'ollama', model: config.ollamaModel, skillName });
+        _activeTracker = ctx;
+        console.log(`[Router] → Ollama ${config.ollamaModel} (emergency fallback — all cloud providers failed)`);
+        try {
+            const result = await handleOllamaTask(text);
+            finishTracking(ctx, true);
+            _activeTracker = null;
+            return result;
+        } catch (e: any) {
+            finishTracking(ctx, false, e.message);
+            _activeTracker = null;
+            console.error('[Router] Ollama emergency fallback also failed:', e.message);
+        }
+    }
+
+    return 'Sorry, all providers (cloud + local) are currently unavailable. Please try again later.';
 }
 
 // ============================

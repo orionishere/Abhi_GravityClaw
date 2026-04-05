@@ -160,6 +160,8 @@ async function fetchOpenAIModels(): Promise<Record<ModelTier, string>> {
     const ids = data.data.map(m => m.id).filter(id =>
         // Only text generation models (exclude whisper, dall-e, embeddings, etc.)
         /^(gpt-|o\d|chatgpt)/.test(id) && !id.includes('instruct') && !id.includes('embed')
+        // Exclude deep-research models — they only work on /v1/responses, not /v1/chat/completions
+        && !id.includes('deep-research')
     );
 
     function scoreOpenAI(id: string): number {

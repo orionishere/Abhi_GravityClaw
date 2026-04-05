@@ -51,6 +51,9 @@ export const config = {
     githubToken: process.env.GITHUB_TOKEN || '',
     githubUsername: process.env.GITHUB_USERNAME || '',
 
+    // --- Cricket Data API ---
+    cricketApiKey: process.env.CRICKET_API_KEY || '',
+
     // --- Ollama (Local LLM — free, runs on your VPS) ---
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3.1:8b',

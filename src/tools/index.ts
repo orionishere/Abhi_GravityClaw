@@ -29,6 +29,12 @@ import { getUsageReportSchema, getUsageReport } from './report.js';
 import { manageGoalsSchema, executeManageGoals } from './manageGoals.js';
 import { manageResearchSchema, executeManageResearch } from './manageResearch.js';
 import { dashboardSchema, executeDashboard } from './dashboard.js';
+import {
+    cricketCurrentMatchesSchema, cricketSeriesSchema, cricketMatchInfoSchema,
+    cricketSeriesInfoSchema, cricketPlayersSchema, cricketPlayerInfoSchema,
+    cricketCurrentMatches, cricketSeries, cricketMatchInfo,
+    cricketSeriesInfo, cricketPlayers, cricketPlayerInfo
+} from './cricket.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -58,7 +64,13 @@ export const tools = [
     getUsageReportSchema,
     manageGoalsSchema,
     manageResearchSchema,
-    dashboardSchema
+    dashboardSchema,
+    cricketCurrentMatchesSchema,
+    cricketSeriesSchema,
+    cricketMatchInfoSchema,
+    cricketSeriesInfoSchema,
+    cricketPlayersSchema,
+    cricketPlayerInfoSchema
 ];
 
 // Export an execution router
@@ -118,6 +130,18 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await executeManageResearch(args);
         case 'dashboard':
             return await executeDashboard(args);
+        case 'cricket_current_matches':
+            return await cricketCurrentMatches(args);
+        case 'cricket_series':
+            return await cricketSeries(args);
+        case 'cricket_match_info':
+            return await cricketMatchInfo(args);
+        case 'cricket_series_info':
+            return await cricketSeriesInfo(args);
+        case 'cricket_players':
+            return await cricketPlayers(args);
+        case 'cricket_player_info':
+            return await cricketPlayerInfo(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

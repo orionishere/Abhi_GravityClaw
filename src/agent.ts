@@ -605,14 +605,21 @@ async function handleClaudeTask(userText: string, model: string, _alreadyPushed 
 // OPENAI HANDLER (Fallback 1)
 // ============================
 async function handleOpenAITask(userText: string, model: string, _alreadyPushed = false): Promise<string> {
+    await compactConversation();
+
     if (!_alreadyPushed) {
         claudeHistory.push({ role: 'user', content: userText });
         geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
     }
 
+    // Build messages from conversation history so the model retains context
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content: userText }
+        ...claudeHistory.map(m => ({
+            role: m.role as 'user' | 'assistant',
+            content: typeof m.content === 'string' ? m.content :
+                Array.isArray(m.content) ? (m.content as any[]).map((p: any) => p.text || '').join(' ') : String(m.content)
+        }))
     ];
 
     let iterations = 0;
@@ -862,9 +869,17 @@ async function handleOllamaTask(userText: string, allowedTools?: string[]): Prom
         }
     }));
 
+    // Include conversation history so Ollama retains context across messages
+    claudeHistory.push({ role: 'user', content: userText });
+    geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
+
     const messages: any[] = [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userText },
+        ...claudeHistory.map(m => ({
+            role: m.role,
+            content: typeof m.content === 'string' ? m.content :
+                Array.isArray(m.content) ? (m.content as any[]).map((p: any) => p.text || '').join(' ') : String(m.content)
+        }))
     ];
 
     let iterations = 0;
@@ -906,9 +921,7 @@ async function handleOllamaTask(userText: string, allowedTools?: string[]): Prom
 
         // No tool calls — we have a final reply
         const reply = result.reply || 'No response generated.';
-        claudeHistory.push({ role: 'user', content: userText });
         claudeHistory.push({ role: 'assistant', content: reply });
-        geminiHistory.push({ role: 'user', parts: [{ text: userText }] });
         geminiHistory.push({ role: 'model', parts: [{ text: reply }] });
         return reply;
     }

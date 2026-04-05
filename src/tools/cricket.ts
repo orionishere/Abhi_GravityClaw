@@ -42,7 +42,7 @@ export const cricketSeriesSchema = {
     type: 'function',
     function: {
         name: 'cricket_series',
-        description: 'List cricket series/tournaments. Optionally search by name (e.g. "IPL 2026", "World Cup"). Returns series IDs you can pass to cricket_series_info to get all matches in that series.',
+        description: 'List cricket series/tournaments. Optionally search by name. IMPORTANT: use the full official name for searches (e.g. "Indian Premier League 2026" not "IPL 2026", "ICC Men\'s T20 World Cup" not "T20 WC"). Short abbreviations often return zero results. Returns series IDs you can pass to cricket_series_info to get all matches in that series.',
         parameters: {
             type: 'object',
             properties: {

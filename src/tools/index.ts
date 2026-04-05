@@ -28,6 +28,7 @@ import {
 import { getUsageReportSchema, getUsageReport } from './report.js';
 import { manageGoalsSchema, executeManageGoals } from './manageGoals.js';
 import { manageResearchSchema, executeManageResearch } from './manageResearch.js';
+import { dashboardSchema, executeDashboard } from './dashboard.js';
 
 // Export the tool schemas for the LLM
 export const tools = [
@@ -56,7 +57,8 @@ export const tools = [
     twitterDraftThreadSchema,
     getUsageReportSchema,
     manageGoalsSchema,
-    manageResearchSchema
+    manageResearchSchema,
+    dashboardSchema
 ];
 
 // Export an execution router
@@ -114,6 +116,8 @@ export async function executeTool(name: string, args: any): Promise<any> {
             return await executeManageGoals(args);
         case 'manage_research':
             return await executeManageResearch(args);
+        case 'dashboard':
+            return await executeDashboard(args);
         default:
             throw new Error(`Unknown tool: ${name}`);
     }

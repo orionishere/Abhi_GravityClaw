@@ -19,18 +19,22 @@
     "better-sqlite3": "^12.6.2",
     "discord.js": "^14.16.0",
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "imap-simple": "^5.1.0",
     "mailparser": "^3.9.3",
     "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
     "openai": "^4.104.0",
     "playwright": "^1.58.2",
+    "ssh2": "^1.17.0",
     "twitter-api-v2": "^1.29.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.11",
+    "@types/ssh2": "^1.15.5",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"

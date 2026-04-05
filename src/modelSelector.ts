@@ -202,10 +202,11 @@ async function fetchGeminiModels(): Promise<Record<ModelTier, string>> {
     if (!res.ok) throw new Error(`Gemini models API: ${res.status}`);
     const data = await res.json() as { models: Array<{ name: string; displayName: string; supportedGenerationMethods: string[] }> };
 
-    // Only keep models that support generateContent
+    // Only keep models that support generateContent; exclude deep-research (incompatible)
     const ids = data.models
         .filter(m => m.supportedGenerationMethods.includes('generateContent'))
-        .map(m => m.name.replace('models/', '')); // strip "models/" prefix
+        .map(m => m.name.replace('models/', ''))  // strip "models/" prefix
+        .filter(id => !id.includes('deep-research'));
 
     function scoreGemini(id: string): number {
         const lower = id.toLowerCase();

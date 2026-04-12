@@ -64,7 +64,7 @@ export const cricketMatchInfoSchema = {
     type: 'function',
     function: {
         name: 'cricket_match_info',
-        description: 'Get info for a specific cricket match by its ID — teams, team-level scores (runs/wickets/overs), toss, venue, result, and winner. NOTE: does NOT include per-player batting/bowling scorecards on the free tier — only team totals.',
+        description: 'Get info for a specific cricket match by its ID — teams, team-level scores (runs/wickets/overs), toss, venue, date, result, and winner.',
         parameters: {
             type: 'object',
             properties: {
@@ -102,7 +102,7 @@ export const cricketPlayersSchema = {
     type: 'function',
     function: {
         name: 'cricket_players',
-        description: 'Search for cricket players by name. Returns player IDs you can use with cricket_player_info for career-aggregate stats. Per-player season-specific stats are not available on the free API tier.',
+        description: 'Search for cricket players by name. Returns player IDs you can use with cricket_player_info for career-aggregate stats.',
         parameters: {
             type: 'object',
             properties: {
@@ -125,7 +125,7 @@ export const cricketPlayerInfoSchema = {
     type: 'function',
     function: {
         name: 'cricket_player_info',
-        description: 'Get detailed info for a specific cricket player by ID — biography, role, country, and CAREER-AGGREGATE stats by format (Test/ODI/T20/IPL). Does NOT have per-season breakdowns. Per-player season stats are not available on the free API tier.',
+        description: 'Get detailed info for a specific cricket player by ID — biography, role, country, and career-aggregate stats by format (Test/ODI/T20/IPL). This only has career totals. For season-specific data (e.g. "IPL 2026"), use cricket_series to find the tournament, then cricket_series_info to get match lists with results and team scores.',
         parameters: {
             type: 'object',
             properties: {
